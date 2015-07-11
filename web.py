@@ -1,8 +1,15 @@
 #coding:utf-8
 
+import os
 import threading
 import re
+import cgi
+import mimetypes
 import urllib.parse
+import logging
+from http.cookies import SimpleCookie
+import time
+from datetime import timedelta, date, datetime
 
 from io import StringIO
 
@@ -137,10 +144,10 @@ _RESPONSE_HEADERS = (
 
 _RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), _RESPONSE_HEADERS), _RESPONSE_HEADERS))
 
+# response_header_dict = _RESPONSE_HEADER_DICT
 _HEADER_X_POWERED_BY = ('X-Powered-By', 'minim/0.1')
 
 
-# HTTP错误类
 class HttpError(Exception):
     """
     HttpError that defines http error code.
@@ -278,46 +285,252 @@ def post(path):
         return func
     return _decorator
 
-
 _re_route = re.compile(r'(:[a-zA-Z_]\w*)')
 
 
-# request对象
-class Request:
-    # 根据key返回value
-    def get(self, key, default=None):
-        pass
+def _build_re(path):
+    re_list = ['^']
+    var_list = []
+    is_var = False
 
-    # 返回key-value的dict
-    def input(self):
-        pass
+    for v in _re_route.split(path):
+        if is_var:
+            var_name = v[1:]
+            var_list.append(var_name)
+            re_list.append(r'(?P<%s>[^/]+)' % var_name)
+        else:
+            s = ''
+            for ch in v:
+                if '0' <= ch <= '9':
+                    s += ch
+                elif 'a' <= ch <= 'z':
+                    s += ch
+                elif 'A' <= ch <= 'Z':
+                    s += ch
+                else:
+                    s += ch
+            re_list.append(s)
+        is_var = not is_var
+    re_list.append('$')
+    return ''.join(re_list)
 
-    # 返回URL的path
-    @property
-    def path_info(self):
+build_re = _build_re
+
+
+class Route:
+    """
+    A Route object is a callable object.
+    """
+    def __init__(self, func):
+        self.path = func.__web_route__
+        self.method = func.__web_method__
+        self.is_static = _re_route.search(self.path) is None
+        if not self.is_static:
+            self.route = re.compile(_build_re(self.path))
+        self.func = func
+
+    # needs modified...
+    def match(self, url):
+        m = self.route.match(url)
+        if m:
+            return m.groups()
         return None
 
-    # 返回HTTP Headers:
+    def __call__(self, *args, **kw):
+        return self.func(*args, **kw)
+
+    def __str__(self):
+        if self.is_static:
+            return 'Route(static, %s, path=%s)' % (self.method, self.path)
+        return 'Route(dynamic, %s, path=%s)' % (self.method, self.path)
+
+    __repr__ = __str__
+
+
+def _static_file_generator(fpath):
+    block_size = 8192
+    with open(fpath, 'rb') as f:
+        block = f.read(block_size)
+        while block:
+            yield block
+            block = f.read(block_size)
+
+
+class StaticFileRoute:
+    def __init__(self):
+        self.method = 'GET'
+        self.is_static = False
+        self.route = re.compile(r'^/static/(.+)$')
+
+    def match(self, url):
+        if url.startswith('/static/'):
+            return (url[1:],)
+        return None
+
+    def __call__(self, *args):
+        fpath = os.path.join(ctx.application.document_root, args[0])
+        if not os.path.isfile(fpath):
+            raise notfound()
+        fext = os.path.splitext(fpath)[1]
+        ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
+        return _static_file_generator(fpath)
+
+
+# def favicon_handler():
+    # return static_file_handler('/favicon.ico')
+
+
+class MultipartFile:
+    """
+    Multipart file storage get from request input
+    """
+    def __init__(self, storage):
+        self.filename = storage.filename
+        self.file = storage.file
+
+
+class Request:
+    def __init__(self, environ):
+        super().__init__()
+        self._environ = environ
+        self._GET = None
+        self._POST = None
+        self._COOKIES = None
+        self._HEADERS = None
+        self.path = self._environ.get('PATH_INFO', '/').strip()
+        if not self.path.startswith('/'):
+            self.path += '/'
+
+    @property
+    def method(self):
+        return self._environ.get('REQUEST_METHOD', 'GET').upper()
+
+    @property
+    def query_string(self):
+        return self._environ.get('QUERY_STRING', '')
+
+    @property
+    def GET(self):
+        if self._GET is None:
+            raw_dict = urllib.parse.parse_qs(self.query_string, keep_blank_values=True)
+            self._GET = Dict()
+            for key, value in raw_dict.items():
+                if len(value) == 1:
+                    self._GET[key] = value[0]
+                else:
+                    self._GET[key] = value
+        return self._GET
+
+    @property
+    def POST(self):
+        if self._POST is None:
+            raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
+            self._POST = Dict()
+            for key in raw_data:
+                if isinstance(raw_data[key], list):
+                    self._POST[key] = [v.value for v in raw_data[key]]
+                elif raw_data[key].filename:
+                    self._POST[key] = raw_data[key]
+                else:
+                    self._POST[key] = raw_data[key].value
+        return self._POST
+
+    @property
+    def cookies(self):
+        if self._COOKIES is None:
+                raw_dict = SimpleCookie(self._environ.get('HTTP_COOKIE', ''))
+                self._COOKIES = Dict()
+                for cookie in raw_dict.values():
+                    self._COOKIES[cookie.key] = _unquote(cookie.value)
+        return self._COOKIES
+
     @property
     def headers(self):
-        return None
+        if self._HEADERS is None:
+            self._HEADERS = Dict()
+            for key, value in self._environ.items():
+                if key.startswith('HTTP_'):
+                     # convert 'HTTP_ACCEPT_ENCODING' to 'ACCEPT-ENCODING'
+                    self._HEADERS[key[5:].replace('_', '-').upper()] = value
+        return self._HEADERS
 
-    # 根据key返回Cookie value
-    def cookie(self, name, default=None):
-        pass
+
+    @property
+    def remote_addr(self):
+        return self._environ.get('REMOTE_ADDR', '0.0.0.0')
+
+    @property
+    def document_root(self):
+        return self._environ.get('DOCUMENT_ROOT', '')
+
+    @property
+    def environ(self):
+        return self._environ
+
+    @property
+    def request_method(self):
+        return self._environ['REQUEST_METHOD']
+
+    @property
+    def path_info(self):
+        return _unquote(self._environ.get('PATH_INFO', ''))
+
+    @property
+    def host(self):
+        return self._environ.get('HTTP_HOST', '')
 
 
-# response对象
 class Response:
-    # 设置header
+
+    def __init__(self):
+        super().__init__()
+        self._cookies = None
+        self._status = '200 OK'
+        self._headers = {'CONTENT-TYPE': 'text/html; charset=UTF-8'}
+
+    @property
+    def status(self):
+        return self._status
+
+    @property
+    def headers(self):
+        return self._headers
+        # return [('Content-Type','text/plain')]
+
     def set_header(self, key, value):
         pass
 
-    # 设置cookie
-    def set_cookie(self, name, value, max_age=None, expires=None, path='/'):
-        pass
+    def set_cookie(self, name, value, secret=None, **options):
+        if not self._cookies:
+            self._cookies = SimpleCookie()
 
-    # 设置status
+        if secret:
+            pass
+
+        if len(value) > 4096:
+            raise ValueError('Cookie value too long.')
+        self._cookies[name] = value
+
+        for k, v in options.items():
+            if k == 'max_age':
+                if isinstance(v, timedelta):
+                    v = v.seconds + v.days*24*3600
+            if k == 'expires':
+                if isinstance(v, (date, datetime)):
+                    v = v.timetuple()
+                elif isinstance(v, (int, float)):
+                    v = time.gmtime(v)
+                v = time.strftime('%a, %d %b %Y %H:%M:%S GMT', v)
+            if k in ('secure', 'httponly') and not v:
+                continue
+
+            self._cookies[name][k.replace('_', '-')] = v
+
+    def delete_cookie(self, key, **kw):
+        kw['max_age'] = -1
+        kw['expires'] = 0
+        self.set_cookie(key, '', **kw)
+
     @property
     def status(self):
         return None
@@ -327,41 +540,113 @@ class Response:
         pass
 
 
-# 定义模板
 def view(path):
     pass
 
 
-# 定义拦截器
 def interceptor(pattern):
     pass
 
 
-# 定义模板引擎
 class BaseTemplate:
     def __call__(self, path, model):
         pass
 
 
-# 定义默认模板引擎
 class MinimTemplate(BaseTemplate):
     pass
 
 
-# 定义WSGIApplication
-class WSGIApplication:
-    def __init__(self, document_root=None, **kw):
-        pass
+class Minim:
+    def __init__(self, template_root=None, Static_root=None, **kw):
+        self._running = False
+        self._get_static = {}
+        self._post_static = {}
+        self._get_dynamic = []
+        self._post_dynamic = []
 
-    # 添加一个URL定义
+    def _check_not_running(self):
+        if self._running:
+            raise RuntimeError('A WSGIApplication is running.')
+
     def add_url(self, func):
+        route = Route(func)
+        if route.is_static:
+            if route.method == 'GET':
+                self._get_static[route.path] = route
+            if route.method == 'POST':
+                self._post_static[route.path] = route
+        else:
+            if route.method == 'GET':
+                self._get_dynamic.append(route)
+            if route.method == 'POST':
+                self._post_dynamic.append(route)
+        logging.info('Add route: %s' % str(route))
+
+    def get(self, path):
         pass
 
-    # 添加一个Interceptor定义
+    def post(self, path):
+        pass
+
+    def run(self, port=8888, host='127.0.0.1'):
+        from wsgiref.simple_server import make_server
+        logging.info('application will start at %s:%s...' % (host, port))
+        server = make_server(host, port, self.get_wsgi_app())
+        server.serve_forever()
+
+    def get_wsgi_app(self):
+        self._check_not_running()
+
+        self._running = True
+
+        import copy
+        g = copy.copy(globals())
+        for v in g.values():
+            if callable(v) and hasattr(v, '__web_route__'):
+                print('***', v)
+                self.add_url(v)
+
+        def fn_route():
+            request_method = ctx.request.request_method
+            path_info = ctx.request.path_info
+            print(path_info)
+            if request_method == 'GET':
+                fn = self._get_static.get(path_info, None)
+                print(fn)
+                if fn:
+                    return fn()
+                for fn in self._get_dynamic:
+                    args = fn.match(path_info)
+                    if args:
+                        return fn(*args)
+                raise notfound()
+            if request_method == 'POST':
+                fn = self._post_static.get(path_info, None)
+                if fn:
+                    return fn()
+                for fn in self._post_dynamic:
+                    args = fn.match(path_info)
+                    if args:
+                        return fn(*args)
+                raise notfound()
+            raise badrequest()
+
+        def wsgi(env, start_response):
+            ctx.request = Request(env)
+            response = ctx.response = Response()
+            # start_response(response.status, response.headers)
+            start_response("200 OK", [('Content-Type', 'text/plain')])
+            # start_response()
+
+            r = fn_route()
+            return r
+
+        return wsgi
+
     def add_interceptor(self, func):
         pass
 
-    # 设置TemplateEngine
     @property
     def template_engine(self):
         return None
@@ -370,11 +655,6 @@ class WSGIApplication:
     def template_engine(self, engine):
         pass
 
-    # 返回WSGI处理函数
-    def get_wsgi_application(self):
-        def wsgi(env, start_response):
-            pass
-        return wsgi
 
 
 

@@ -1,0 +1,3 @@
+Hello Minim~
+This is a very cute web framework~
+Keep calm and carry on!
