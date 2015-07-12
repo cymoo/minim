@@ -1,4 +1,3 @@
-from web import get, Route
 import threading
 
 # @get('/index/:var')
@@ -61,16 +60,27 @@ from io import StringIO, BytesIO
 #     if callable(v) and hasattr(v, 'haha'):
 #         print(v)
 
-from web import Minim, get, post
+from web import Minim
 
 app = Minim()
 
-@get('/index')
+@app.get('/')
 def index():
-    print('hello minim')
-print(index.__web_route__)
+    return 'hello minim!'
+
+@app.get('/:name')
+def uname(name):
+    return 'hello %s' % name
+
+@app.get('/blog')
+def blog():
+    return ['i will writing something simple but beautiful~'.encode('utf-8')]
 
 app.run()
+
+
+
+
 
 
 

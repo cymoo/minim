@@ -269,21 +269,21 @@ def _unquote(s):
     """
     return urllib.parse.unquote(s)
 
-
-def get(path):
-    def _decorator(func):
-        func.__web_route__ = path
-        func.__web_method__ = 'GET'
-        return func
-    return _decorator
-
-
-def post(path):
-    def _decorator(func):
-        func.__web_route__ = path
-        func.__web_method__ = 'POST'
-        return func
-    return _decorator
+#
+# def get(path):
+#     def _decorator(func):
+#         func.__web_route__ = path
+#         func.__web_method__ = 'GET'
+#         return func
+#     return _decorator
+#
+#
+# def post(path):
+#     def _decorator(func):
+#         func.__web_route__ = path
+#         func.__web_method__ = 'POST'
+#         return func
+#     return _decorator
 
 _re_route = re.compile(r'(:[a-zA-Z_]\w*)')
 
@@ -584,14 +584,19 @@ class Minim:
         logging.info('Add route: %s' % str(route))
 
     def get(self, path):
-        pass
+        def _decorator(func):
+            func.__web_route__ = path
+            func.__web_method__ = 'GET'
+            self.add_url(func)
+            return func
+        return _decorator
 
     def post(self, path):
         pass
 
-    def run(self, port=8888, host='127.0.0.1'):
+    def run(self, host='127.0.0.1', port=9000):
         from wsgiref.simple_server import make_server
-        logging.info('application will start at %s:%s...' % (host, port))
+        logging.warning('application will start at %s:%s...' % (host, port))
         server = make_server(host, port, self.get_wsgi_app())
         server.serve_forever()
 
@@ -600,20 +605,18 @@ class Minim:
 
         self._running = True
 
-        import copy
-        g = copy.copy(globals())
-        for v in g.values():
-            if callable(v) and hasattr(v, '__web_route__'):
-                print('***', v)
-                self.add_url(v)
+        # import copy
+        # g = copy.copy(globals())
+        # for v in g.values():
+        #     if callable(v) and hasattr(v, '__web_route__'):
+        #         print('***', v)
+        #         self.add_url(v)
 
         def fn_route():
             request_method = ctx.request.request_method
             path_info = ctx.request.path_info
-            print(path_info)
             if request_method == 'GET':
                 fn = self._get_static.get(path_info, None)
-                print(fn)
                 if fn:
                     return fn()
                 for fn in self._get_dynamic:
@@ -636,10 +639,10 @@ class Minim:
             ctx.request = Request(env)
             response = ctx.response = Response()
             # start_response(response.status, response.headers)
-            start_response("200 OK", [('Content-Type', 'text/plain')])
+            start_response('200 OK', [('Content-Type', 'text/plain')])
             # start_response()
 
-            r = fn_route()
+            r = [fn_route().encode('utf-8')]
             return r
 
         return wsgi
