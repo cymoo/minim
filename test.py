@@ -60,23 +60,34 @@ from io import StringIO, BytesIO
 #     if callable(v) and hasattr(v, 'haha'):
 #         print(v)
 
-from web import Minim
+from web import Minim, response_header_dict
+#
+# app = Minim()
+#
+# @app.get('/')
+# def index():
+#     return 'hello minim!'
+#
+# @app.get('/:name')
+# def uname(name):
+#     return 'hello %s' % name
+#
+# @app.get('/blog')
+# def blog():
+#     return 'i will writing something simple but beautiful~'
+#
+#
+# app.run()
+
+# print(response_header_dict)
+
+from web import Minim, response, request
 
 app = Minim()
 
-@app.get('/')
-def index():
-    return 'hello minim!'
 
-@app.get('/:name')
-def uname(name):
-    return 'hello %s' % name
-
-@app.get('/blog')
-def blog():
-    return ['i will writing something simple but beautiful~'.encode('utf-8')]
-
-app.run()
+def foo():
+    pass
 
 
 

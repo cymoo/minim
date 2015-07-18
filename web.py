@@ -10,11 +10,9 @@ import logging
 from http.cookies import SimpleCookie
 import time
 from datetime import timedelta, date, datetime
+from json import dumps as json_dumps
 
 from io import StringIO
-
-# thread local object for storing request and response:
-ctx = threading.local()
 
 
 # Dict object:
@@ -32,6 +30,16 @@ class Dict(dict):
 
     def __setattr__(self, key, value):
         self[key] = value
+
+
+# convert tuple, list, set to list
+def make_list(data):
+    if isinstance(data, (tuple, list, set)):
+        return list(data)
+    elif data:
+        return [data]
+    else:
+        return []
 
 
 # all known response statues:
@@ -98,7 +106,7 @@ _RESPONSE_STATUSES = {
     510: 'Not Extended',
 }
 
-_RE_RESPONSE_STATUS = re.compile(r'^\d\d\d( [\w ]+)?$')
+# _RE_RESPONSE_STATUS = re.compile(r'^\d\d\d( [\w ]+)?$')
 
 _RESPONSE_HEADERS = (
     'Accept-Ranges',
@@ -144,7 +152,7 @@ _RESPONSE_HEADERS = (
 
 _RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), _RESPONSE_HEADERS), _RESPONSE_HEADERS))
 
-# response_header_dict = _RESPONSE_HEADER_DICT
+response_header_dict = _RESPONSE_HEADER_DICT
 _HEADER_X_POWERED_BY = ('X-Powered-By', 'minim/0.1')
 
 
@@ -193,7 +201,7 @@ class RedirectError(HttpError):
     __repr__ = __str__
 
 
-def badrequest():
+def bad_request():
     """
     Send a bad request response.
     """
@@ -214,7 +222,7 @@ def forbidden():
     return HttpError(403)
 
 
-def notfound():
+def not_found():
     """
     Send a not found response.
     """
@@ -228,7 +236,7 @@ def conflict():
     return HttpError(409)
 
 
-def internalerror():
+def internal_error():
     """
     Send an internal error response.
     """
@@ -249,7 +257,7 @@ def found(location):
     return RedirectError(302, location)
 
 
-def seeother(location):
+def see_other(location):
     """
     Do temporary redirect.
     """
@@ -269,82 +277,71 @@ def _unquote(s):
     """
     return urllib.parse.unquote(s)
 
+
+def _to_bytes(s):
+    if isinstance(s, str):
+        return s.encode('utf-8')
+    if isinstance(s, bytes):
+        return s
+
+# _re_route = re.compile(r'(:[a-zA-Z_]\w*)')
+
+
+# def _build_re(path):
+#     re_list = ['^']
+#     var_list = []
+#     is_var = False
 #
-# def get(path):
-#     def _decorator(func):
-#         func.__web_route__ = path
-#         func.__web_method__ = 'GET'
-#         return func
-#     return _decorator
+#     for v in _re_route.split(path):
+#         if is_var:
+#             var_name = v[1:]
+#             var_list.append(var_name)
+#             re_list.append(r'(?P<%s>[^/]+)' % var_name)
+#         else:
+#             s = ''
+#             for ch in v:
+#                 if '0' <= ch <= '9':
+#                     s += ch
+#                 elif 'a' <= ch <= 'z':
+#                     s += ch
+#                 elif 'A' <= ch <= 'Z':
+#                     s += ch
+#                 else:
+#                     s += ch
+#             re_list.append(s)
+#         is_var = not is_var
+#     re_list.append('$')
+#     return ''.join(re_list)
+
+
+# class Route:
+#     """
+#     A Route object is a callable object.
+#     """
+#     def __init__(self, func):
+#         self.path = func.__web_route__
+#         self.method = func.__web_method__
+#         self.is_static = _re_route.search(self.path) is None
+#         if not self.is_static:
+#             self.route = re.compile(_build_re(self.path))
+#         self.func = func
 #
+#     # needs modified...
+#     def match(self, url):
+#         m = self.route.match(url)
+#         if m:
+#             return m.groups()
+#         return None
 #
-# def post(path):
-#     def _decorator(func):
-#         func.__web_route__ = path
-#         func.__web_method__ = 'POST'
-#         return func
-#     return _decorator
-
-_re_route = re.compile(r'(:[a-zA-Z_]\w*)')
-
-
-def _build_re(path):
-    re_list = ['^']
-    var_list = []
-    is_var = False
-
-    for v in _re_route.split(path):
-        if is_var:
-            var_name = v[1:]
-            var_list.append(var_name)
-            re_list.append(r'(?P<%s>[^/]+)' % var_name)
-        else:
-            s = ''
-            for ch in v:
-                if '0' <= ch <= '9':
-                    s += ch
-                elif 'a' <= ch <= 'z':
-                    s += ch
-                elif 'A' <= ch <= 'Z':
-                    s += ch
-                else:
-                    s += ch
-            re_list.append(s)
-        is_var = not is_var
-    re_list.append('$')
-    return ''.join(re_list)
-
-build_re = _build_re
-
-
-class Route:
-    """
-    A Route object is a callable object.
-    """
-    def __init__(self, func):
-        self.path = func.__web_route__
-        self.method = func.__web_method__
-        self.is_static = _re_route.search(self.path) is None
-        if not self.is_static:
-            self.route = re.compile(_build_re(self.path))
-        self.func = func
-
-    # needs modified...
-    def match(self, url):
-        m = self.route.match(url)
-        if m:
-            return m.groups()
-        return None
-
-    def __call__(self, *args, **kw):
-        return self.func(*args, **kw)
-
-    def __str__(self):
-        if self.is_static:
-            return 'Route(static, %s, path=%s)' % (self.method, self.path)
-        return 'Route(dynamic, %s, path=%s)' % (self.method, self.path)
-
-    __repr__ = __str__
+#     def __call__(self, *args, **kw):
+#         return self.func(*args, **kw)
+#
+#     def __str__(self):
+#         if self.is_static:
+#             return 'Route(static, %s, path=%s)' % (self.method, self.path)
+#         return 'Route(dynamic, %s, path=%s)' % (self.method, self.path)
+#
+#     __repr__ = __str__
 
 
 def _static_file_generator(fpath):
@@ -356,24 +353,24 @@ def _static_file_generator(fpath):
             block = f.read(block_size)
 
 
-class StaticFileRoute:
-    def __init__(self):
-        self.method = 'GET'
-        self.is_static = False
-        self.route = re.compile(r'^/static/(.+)$')
-
-    def match(self, url):
-        if url.startswith('/static/'):
-            return (url[1:],)
-        return None
-
-    def __call__(self, *args):
-        fpath = os.path.join(ctx.application.document_root, args[0])
-        if not os.path.isfile(fpath):
-            raise notfound()
-        fext = os.path.splitext(fpath)[1]
-        ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
-        return _static_file_generator(fpath)
+# class StaticFileRoute:
+#     def __init__(self):
+#         self.method = 'GET'
+#         self.is_static = False
+#         self.route = re.compile(r'^/static/(.+)$')
+#
+#     def match(self, url):
+#         if url.startswith('/static/'):
+#             return (url[1:],)
+#         return None
+#
+#     def __call__(self, *args):
+#         fpath = os.path.join(ctx.application.document_root, args[0])
+#         if not os.path.isfile(fpath):
+#             raise notfound()
+#         fext = os.path.splitext(fpath)[1]
+#         ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
+#         return _static_file_generator(fpath)
 
 
 # def favicon_handler():
@@ -389,10 +386,10 @@ class MultipartFile:
         self.file = storage.file
 
 
-class Request:
-    def __init__(self, environ):
+class Request(threading.local):
+    def __init__(self, environ=None):
         super().__init__()
-        self._environ = environ
+        self._environ = {} if environ is None else environ
         self._GET = None
         self._POST = None
         self._COOKIES = None
@@ -400,6 +397,9 @@ class Request:
         self.path = self._environ.get('PATH_INFO', '/').strip()
         if not self.path.startswith('/'):
             self.path += '/'
+
+    def bind(self, environ):
+        self._environ = environ
 
     @property
     def method(self):
@@ -409,6 +409,14 @@ class Request:
     def query_string(self):
         return self._environ.get('QUERY_STRING', '')
 
+    @property
+    def input_length(self):
+        try:
+            return max(0, int(self._environ.get('CONTENT_LENGTH', '0')))
+        except ValueError:
+            return 0
+
+    # um, what is PEP8? Is it delicious?
     @property
     def GET(self):
         if self._GET is None:
@@ -454,7 +462,6 @@ class Request:
                     self._HEADERS[key[5:].replace('_', '-').upper()] = value
         return self._HEADERS
 
-
     @property
     def remote_addr(self):
         return self._environ.get('REMOTE_ADDR', '0.0.0.0')
@@ -480,30 +487,68 @@ class Request:
         return self._environ.get('HTTP_HOST', '')
 
 
-class Response:
+class Response(threading.local):
+    default_content_type = 'text/html; charset=UTF-8'
 
-    def __init__(self):
+    def __init__(self, status=None, headers=None, **more_headers):
         super().__init__()
         self._cookies = None
         self._status = '200 OK'
         self._headers = {'CONTENT-TYPE': 'text/html; charset=UTF-8'}
 
     @property
+    def status_code(self):
+        return int(self._status[:3])
+
+    @property
     def status(self):
         return self._status
 
+    @status.setter
+    def status(self, value):
+        if isinstance(value, int):
+            if 100 <= value <= 999:
+                status_str = _RESPONSE_STATUSES.get(value, '')
+                if status_str:
+                    self._status = '%d %s' % (value, status_str)
+                else:
+                    self._status = str(value)
+            else:
+                raise ValueError('Bad response code: %d.' % value)
+        else:
+            raise TypeError('Bad type of response code.')
+
     @property
     def headers(self):
-        return self._headers
-        # return [('Content-Type','text/plain')]
+        l = [(_RESPONSE_HEADER_DICT.get(k, k), v) for k, v in self._headers.items()]
+        if self._cookies is not None:
+            for v in self._cookies.values():
+                l.append(('Set-Cookie', v))
+        l.append(_HEADER_X_POWERED_BY)
+        return l
 
-    def set_header(self, key, value):
-        pass
+    def header(self, name):
+        key = name.upper()
+        if not key in _RESPONSE_HEADER_DICT:
+            key = name
+        return self._headers.get(key)
+
+    def unset_header(self, name):
+        key = name.upper()
+        if not key in _RESPONSE_HEADER_DICT:
+            key = name
+        if key in self._headers:
+            del self._headers[key]
+
+    def set_header(self, name, value):
+        key = name.upper()
+        if not key in _RESPONSE_HEADER_DICT:
+            key = name
+        self._headers[key] = value
 
     def set_cookie(self, name, value, secret=None, **options):
         if not self._cookies:
             self._cookies = SimpleCookie()
-
         if secret:
             pass
 
@@ -531,20 +576,71 @@ class Response:
         kw['expires'] = 0
         self.set_cookie(key, '', **kw)
 
-    @property
-    def status(self):
-        return None
 
-    @status.setter
-    def status(self, value):
+class Router:
+    def __init__(self):
+        self.static_routes = {}
+        self.dynamic_routes = {}
+        self.dynamic_re_routes = {}
+
+    def add(self, rule, method, callback):
+        pass
+
+    def _build_re(self, rule):
+        slash_pattern = re.compile(r'/')
+        str_pattern = re.compile(r'<\s*([a-zA-Z_]\w+)\s*>')
+        int_pattern = re.compile(r'<\s*int:\s*([a-zA-Z_]\w+)\s*>')
+        float_pattern = re.compile(r'<\s*float:\s*([a-zA-Z_]\w+)\s*>')
+        re_pattern = re.compile(r'<\s*re:\s*(.+):\s*([a-zA-Z_]\w+)\s*>')
+        re_list = ['^/']
+        arg_list = []
+
+        if rule.startswith('/'):
+            rule = rule[1:]
+
+        for seg in slash_pattern.split(rule):
+            if str_pattern.match(seg):
+                arg_name = str_pattern.match(seg).group(1)
+                arg_list.append(arg_name)
+                re_list.append(r'(?P<%s>\w+)' % arg_name)
+                re_list.append('/')
+            elif int_pattern.match(seg):
+                arg_name = int_pattern.match(seg).group(1)
+                arg_list.append(arg_name)
+                re_list.append(r'(?P<%s>\d+)' % arg_name)
+                re_list.append('/')
+            elif float_pattern.match(seg):
+                arg_name = float_pattern.match(seg).group(1)
+                arg_list.append(arg_name)
+                re_list.append(r'(?P<%s>\d+\.\d+)' % arg_name)
+                re_list.append('/')
+            elif re_pattern.match(seg):
+                re_result = re_pattern.match(seg)
+                inner_re = re_result.group(1)
+                arg_name = re_result.group(2)
+                arg_list.append(arg_name)
+                re_list.append(r'(?P<%s>%s)' % (arg_name, inner_re))
+                re_list.append('/')
+            else:
+                re_list.append(seg)
+                re_list.append('/')
+        re_list.pop(-1)
+        re_list.append('$')
+        return re.compile(''.join(re_list))
+
+    def match(self, environ):
         pass
 
 
-def view(path):
-    pass
+class Route:
+    def __init__(self, app, rule, method, callback):
+        self.app = app
+        self.rule = rule
+        self.methods = method
+        self.callback = callback
 
 
-def interceptor(pattern):
+class Cache:
     pass
 
 
@@ -558,107 +654,166 @@ class MinimTemplate(BaseTemplate):
 
 
 class Minim:
-    def __init__(self, template_root=None, Static_root=None, **kw):
+    def __init__(self, template_dir=None, Static_dir=None, auto_json=True, **kw):
         self._running = False
-        self._get_static = {}
-        self._post_static = {}
-        self._get_dynamic = []
-        self._post_dynamic = []
+        self._router = Router()
+        self._routes = []
+        self.auto_json = auto_json
 
-    def _check_not_running(self):
+    def _is_running(self):
         if self._running:
-            raise RuntimeError('A WSGIApplication is running.')
+            raise RuntimeError('A WSGIApplication is already running.')
 
-    def add_url(self, func):
-        route = Route(func)
-        if route.is_static:
-            if route.method == 'GET':
-                self._get_static[route.path] = route
-            if route.method == 'POST':
-                self._post_static[route.path] = route
-        else:
-            if route.method == 'GET':
-                self._get_dynamic.append(route)
-            if route.method == 'POST':
-                self._post_dynamic.append(route)
-        logging.info('Add route: %s' % str(route))
+    # def add_url(self, func):
+    #     route = Route(func)
+    #     if route.is_static:
+    #         if route.method == 'GET':
+    #             self._get_static[route.path] = route
+    #         if route.method == 'POST':
+    #             self._post_static[route.path] = route
+    #     else:
+    #         if route.method == 'GET':
+    #             self._get_dynamic.append(route)
+    #         if route.method == 'POST':
+    #             self._post_dynamic.append(route)
+    #     logging.info('Add route: %s' % str(route))
+
+    def before_request(self):
+        pass
+
+    def after_request(self):
+        pass
 
     def get(self, path):
-        def _decorator(func):
-            func.__web_route__ = path
-            func.__web_method__ = 'GET'
-            self.add_url(func)
-            return func
-        return _decorator
+        pass
 
     def post(self, path):
         pass
 
+    def put(self, path):
+        pass
+
+    def delete(self, path):
+        pass
+
+    def patch(self, path):
+        pass
+
+    def head(self, path):
+        pass
+
+    def error(self, code=500):
+        pass
+
+    def match(self, environ):
+        return self._router.match(environ)
+
+    def add_route(self, route):
+        self._routes.append(route)
+        self._router.add(route.rule, route.method, route.callback)
+
+    def route(self, rule=None, methods='GET'):
+        def _decorator(func):
+            for verb in make_list(methods):
+                verb = verb.upper()
+                route = Route(self, rule, verb, func)
+                self.add_route(route)
+            return func
+        return _decorator
+
+    def _handle(self):
+        pass
+
+    def _cast(self, out):
+        if self.auto_json and isinstance(out, (dict, list)):
+            out = [json_dumps(out).encode('utf-8')]
+        elif not out:
+            out = []
+            response.set_header('Content-Length', '0')
+        elif isinstance(out, str):
+            out = [out.encode('utf-8')]
+        elif isinstance(out, bytes):
+            out = [out]
+        elif hasattr(out, 'read'):
+            # out = request.environ.get('wsgi.file_wrapper', lambda x: iter(lambda: x.read(8192), ''))(out)
+            pass
+        elif not hasattr(out, '__iter__'):
+            raise TypeError('Request handler returned [%s] which is not iterable.' % type(out).__name__)
+        return out
+
+    def render(self):
+        pass
+
+    def cached(self, max_age=None, max_page_num=None):
+        pass
+
+    def wsgi(self, environ, start_response):
+        request.bind(environ)
+        start_response(response.status, response.headers)
+        return self._cast('Hello Minim!')
+
+    # def run(self):
+    #     pass
+
+    def __call__(self, environ, start_response):
+        return self.wsgi(environ, start_response)
+
     def run(self, host='127.0.0.1', port=9000):
         from wsgiref.simple_server import make_server
         logging.warning('application will start at %s:%s...' % (host, port))
-        server = make_server(host, port, self.get_wsgi_app())
+        server = make_server(host, port, self)
         server.serve_forever()
 
-    def get_wsgi_app(self):
-        self._check_not_running()
+    # def get_wsgi_app(self):
+    #     self._check_not_running()
+    #
+    #     self._running = True
+    #
+    #     def fn_route():
+    #         request_method = ctx.request.request_method
+    #         path_info = ctx.request.path_info
+    #         if request_method == 'GET':
+    #             fn = self._get_static.get(path_info, None)
+    #             if fn:
+    #                 return fn()
+    #             for fn in self._get_dynamic:
+    #                 args = fn.match(path_info)
+    #                 if args:
+    #                     return fn(*args)
+    #             raise notfound()
+    #         if request_method == 'POST':
+    #             fn = self._post_static.get(path_info, None)
+    #             if fn:
+    #                 return fn()
+    #             for fn in self._post_dynamic:
+    #                 args = fn.match(path_info)
+    #                 if args:
+    #                     return fn(*args)
+    #             raise notfound()
+    #         raise badrequest()
+    #
+    #     def wsgi(env, start_response):
+    #         ctx.request = Request(env)
+    #         response = ctx.response = Response()
+    #         start_response('200 OK', [('Content-Type', 'text/plain')])
+    #         r = fn_route()
+    #         return self._cast(r)
+    #
+    #     return wsgi
 
-        self._running = True
+    # def add_interceptor(self, func):
+    #     pass
+    #
+    # @property
+    # def template_engine(self):
+    #     return None
+    #
+    # @template_engine.setter
+    # def template_engine(self, engine):
+    #     pass
 
-        # import copy
-        # g = copy.copy(globals())
-        # for v in g.values():
-        #     if callable(v) and hasattr(v, '__web_route__'):
-        #         print('***', v)
-        #         self.add_url(v)
+# Module initialization
 
-        def fn_route():
-            request_method = ctx.request.request_method
-            path_info = ctx.request.path_info
-            if request_method == 'GET':
-                fn = self._get_static.get(path_info, None)
-                if fn:
-                    return fn()
-                for fn in self._get_dynamic:
-                    args = fn.match(path_info)
-                    if args:
-                        return fn(*args)
-                raise notfound()
-            if request_method == 'POST':
-                fn = self._post_static.get(path_info, None)
-                if fn:
-                    return fn()
-                for fn in self._post_dynamic:
-                    args = fn.match(path_info)
-                    if args:
-                        return fn(*args)
-                raise notfound()
-            raise badrequest()
-
-        def wsgi(env, start_response):
-            ctx.request = Request(env)
-            response = ctx.response = Response()
-            # start_response(response.status, response.headers)
-            start_response('200 OK', [('Content-Type', 'text/plain')])
-            # start_response()
-
-            r = [fn_route().encode('utf-8')]
-            return r
-
-        return wsgi
-
-    def add_interceptor(self, func):
-        pass
-
-    @property
-    def template_engine(self):
-        return None
-
-    @template_engine.setter
-    def template_engine(self, engine):
-        pass
-
-
-
-
-
+request = Request()
+response = Response()
+local = threading.local()
