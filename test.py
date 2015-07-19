@@ -60,7 +60,7 @@ from io import StringIO, BytesIO
 #     if callable(v) and hasattr(v, 'haha'):
 #         print(v)
 
-from web import Minim, response_header_dict
+from web import Minim, response_header_dict, Route, Router
 #
 # app = Minim()
 #
@@ -86,8 +86,26 @@ from web import Minim, response, request
 app = Minim()
 
 
-def foo():
-    pass
+@app.get('/')
+def index():
+    print(request.query_string)
+    return 'hello minim'
+
+
+# @app.post('/')
+# def index():
+#     print(request.query_string)
+#     return 'hello minim'
+
+@app.get('/blog/<int:bar>/<foo>')
+def blog(bar, foo):
+    print(bar)
+    print(foo)
+    # response.set_header('cymoo', 'keep calm and carry on')
+    # response.set_cookie('logged', 'yes')
+    return str(bar)
+
+app.run()
 
 
 

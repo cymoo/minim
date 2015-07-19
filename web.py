@@ -229,6 +229,13 @@ def not_found():
     return HttpError(404)
 
 
+def not_allowed():
+    """
+    Send a method not allowed response.
+    """
+    return HttpError(405)
+
+
 def conflict():
     """
     Send a conflict response.
@@ -394,9 +401,9 @@ class Request(threading.local):
         self._POST = None
         self._COOKIES = None
         self._HEADERS = None
-        self.path = self._environ.get('PATH_INFO', '/').strip()
-        if not self.path.startswith('/'):
-            self.path += '/'
+        # self.path = self._environ.get('PATH_INFO', '/').strip()
+        # if not self.path.startswith('/'):
+        #     self.path += '/'
 
     def bind(self, environ):
         self._environ = environ
@@ -474,12 +481,12 @@ class Request(threading.local):
     def environ(self):
         return self._environ
 
-    @property
-    def request_method(self):
-        return self._environ['REQUEST_METHOD']
+    # @property
+    # def request_method(self):
+    #     return self._environ['REQUEST_METHOD']
 
     @property
-    def path_info(self):
+    def path(self):
         return _unquote(self._environ.get('PATH_INFO', ''))
 
     @property
@@ -579,14 +586,35 @@ class Response(threading.local):
 
 class Router:
     def __init__(self):
-        self.static_routes = {}
-        self.dynamic_routes = {}
-        self.dynamic_re_routes = {}
+        self.static_routes = {
+            'GET': {},
+            'POST': {},
+            'PUT': {},
+            'DELETE': {}
+        }
+        self.dynamic_routes = {
+            'GET': {},
+            'POST': {},
+            'PUT': {},
+            'DELETE': {}
+        }
+
+    @staticmethod
+    def is_static(rule):
+        pattern = re.compile(r'<[^/]+>')
+        return True if pattern.search(rule) is None else False
 
     def add(self, rule, method, callback):
-        pass
+        if self.is_static(rule):
+            self.static_routes[method][rule] = callback
+        else:
+            k = self._build_re(rule)
+            print(k)
+            self.dynamic_routes[method][k] = callback
 
-    def _build_re(self, rule):
+
+    @staticmethod
+    def _build_re(rule):
         slash_pattern = re.compile(r'/')
         str_pattern = re.compile(r'<\s*([a-zA-Z_]\w+)\s*>')
         int_pattern = re.compile(r'<\s*int:\s*([a-zA-Z_]\w+)\s*>')
@@ -606,12 +634,12 @@ class Router:
                 re_list.append('/')
             elif int_pattern.match(seg):
                 arg_name = int_pattern.match(seg).group(1)
-                arg_list.append(arg_name)
+                arg_list.append(arg_name + '_int_')
                 re_list.append(r'(?P<%s>\d+)' % arg_name)
                 re_list.append('/')
             elif float_pattern.match(seg):
                 arg_name = float_pattern.match(seg).group(1)
-                arg_list.append(arg_name)
+                arg_list.append(arg_name + '_float_')
                 re_list.append(r'(?P<%s>\d+\.\d+)' % arg_name)
                 re_list.append('/')
             elif re_pattern.match(seg):
@@ -626,17 +654,48 @@ class Router:
                 re_list.append('/')
         re_list.pop(-1)
         re_list.append('$')
-        return re.compile(''.join(re_list))
+        args = tuple(arg_list)
+        return ''.join(re_list), args
 
-    def match(self, environ):
-        pass
+    def match(self):
+        method = request.method
+        url = request.path
+        static_func = self.static_routes[method].get(url)
+        if static_func is not None:
+            return static_func()
+
+        for pattern_arg, dynamic_func in self.dynamic_routes[method].items():
+            s = re.compile(pattern_arg[0]).match(url)
+            if s is not None:
+                params = make_list(s.groups())
+                args = pattern_arg[1]
+                for index, arg in enumerate(args):
+                    if arg.endswith('_int_'):
+                        params[index] = int(params[index])
+                    if arg.endswith('_float_'):
+                        params[index] = float(params[index])
+                print(dynamic_func)
+                print(params)
+                return dynamic_func(*params)
+
+        # method not allowed
+        for route in self.static_routes.values():
+            if route.get(url) is not None:
+                not_allowed()
+
+        for route in self.dynamic_routes.values():
+            for pair in route.keys():
+                if re.compile(pair[0]).match(url) is not None:
+                    not_allowed()
+        # no match
+        not_found()
 
 
 class Route:
     def __init__(self, app, rule, method, callback):
         self.app = app
         self.rule = rule
-        self.methods = method
+        self.method = method
         self.callback = callback
 
 
@@ -664,40 +723,26 @@ class Minim:
         if self._running:
             raise RuntimeError('A WSGIApplication is already running.')
 
-    # def add_url(self, func):
-    #     route = Route(func)
-    #     if route.is_static:
-    #         if route.method == 'GET':
-    #             self._get_static[route.path] = route
-    #         if route.method == 'POST':
-    #             self._post_static[route.path] = route
-    #     else:
-    #         if route.method == 'GET':
-    #             self._get_dynamic.append(route)
-    #         if route.method == 'POST':
-    #             self._post_dynamic.append(route)
-    #     logging.info('Add route: %s' % str(route))
-
     def before_request(self):
         pass
 
     def after_request(self):
         pass
 
-    def get(self, path):
-        pass
+    def get(self, rule, methods='GET'):
+        return self.route(rule=rule, methods=methods)
 
-    def post(self, path):
-        pass
+    def post(self, rule, methods='POST'):
+        return self.route(rule=rule, methods=methods)
 
-    def put(self, path):
-        pass
+    def put(self, rule, methods='PUT'):
+        return self.route(rule=rule, methods=methods)
 
-    def delete(self, path):
-        pass
+    def delete(self, rule, methods='DELETE'):
+        return self.route(rule=rule, methods=methods)
 
-    def patch(self, path):
-        pass
+    def patch(self, rule, methods='PATCH'):
+        return self.route(rule=rule, methods=methods)
 
     def head(self, path):
         pass
@@ -705,8 +750,8 @@ class Minim:
     def error(self, code=500):
         pass
 
-    def match(self, environ):
-        return self._router.match(environ)
+    def match(self):
+        return self._router.match()
 
     def add_route(self, route):
         self._routes.append(route)
@@ -722,6 +767,7 @@ class Minim:
         return _decorator
 
     def _handle(self):
+        # self.match()
         pass
 
     def _cast(self, out):
@@ -732,6 +778,8 @@ class Minim:
             response.set_header('Content-Length', '0')
         elif isinstance(out, str):
             out = [out.encode('utf-8')]
+        # elif isinstance(out, (int, float)):
+        #     out = str(out).encode('utf-8')
         elif isinstance(out, bytes):
             out = [out]
         elif hasattr(out, 'read'):
@@ -750,10 +798,8 @@ class Minim:
     def wsgi(self, environ, start_response):
         request.bind(environ)
         start_response(response.status, response.headers)
-        return self._cast('Hello Minim!')
-
-    # def run(self):
-    #     pass
+        out = self._cast(self.match())
+        return out
 
     def __call__(self, environ, start_response):
         return self.wsgi(environ, start_response)
