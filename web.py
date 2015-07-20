@@ -291,75 +291,16 @@ def _to_bytes(s):
     if isinstance(s, bytes):
         return s
 
-# _re_route = re.compile(r'(:[a-zA-Z_]\w*)')
 
-
-# def _build_re(path):
-#     re_list = ['^']
-#     var_list = []
-#     is_var = False
+# def _static_file_generator(fpath):
+#     block_size = 8192
+#     with open(fpath, 'rb') as f:
+#         block = f.read(block_size)
+#         while block:
+#             yield block
+#             block = f.read(block_size)
 #
-#     for v in _re_route.split(path):
-#         if is_var:
-#             var_name = v[1:]
-#             var_list.append(var_name)
-#             re_list.append(r'(?P<%s>[^/]+)' % var_name)
-#         else:
-#             s = ''
-#             for ch in v:
-#                 if '0' <= ch <= '9':
-#                     s += ch
-#                 elif 'a' <= ch <= 'z':
-#                     s += ch
-#                 elif 'A' <= ch <= 'Z':
-#                     s += ch
-#                 else:
-#                     s += ch
-#             re_list.append(s)
-#         is_var = not is_var
-#     re_list.append('$')
-#     return ''.join(re_list)
-
-
-# class Route:
-#     """
-#     A Route object is a callable object.
-#     """
-#     def __init__(self, func):
-#         self.path = func.__web_route__
-#         self.method = func.__web_method__
-#         self.is_static = _re_route.search(self.path) is None
-#         if not self.is_static:
-#             self.route = re.compile(_build_re(self.path))
-#         self.func = func
 #
-#     # needs modified...
-#     def match(self, url):
-#         m = self.route.match(url)
-#         if m:
-#             return m.groups()
-#         return None
-#
-#     def __call__(self, *args, **kw):
-#         return self.func(*args, **kw)
-#
-#     def __str__(self):
-#         if self.is_static:
-#             return 'Route(static, %s, path=%s)' % (self.method, self.path)
-#         return 'Route(dynamic, %s, path=%s)' % (self.method, self.path)
-#
-#     __repr__ = __str__
-
-
-def _static_file_generator(fpath):
-    block_size = 8192
-    with open(fpath, 'rb') as f:
-        block = f.read(block_size)
-        while block:
-            yield block
-            block = f.read(block_size)
-
-
 # class StaticFileRoute:
 #     def __init__(self):
 #         self.method = 'GET'
@@ -374,23 +315,23 @@ def _static_file_generator(fpath):
 #     def __call__(self, *args):
 #         fpath = os.path.join(ctx.application.document_root, args[0])
 #         if not os.path.isfile(fpath):
-#             raise notfound()
+#             raise not_found()
 #         fext = os.path.splitext(fpath)[1]
 #         ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
 #         return _static_file_generator(fpath)
-
-
+#
+#
 # def favicon_handler():
-    # return static_file_handler('/favicon.ico')
-
-
-class MultipartFile:
-    """
-    Multipart file storage get from request input
-    """
-    def __init__(self, storage):
-        self.filename = storage.filename
-        self.file = storage.file
+#     return static_file_handler('/favicon.ico')
+#
+#
+# class MultipartFile:
+#     """
+#     Multipart file storage get from request input
+#     """
+#     def __init__(self, storage):
+#         self.filename = storage.filename
+#         self.file = storage.file
 
 
 class Request(threading.local):
@@ -480,10 +421,6 @@ class Request(threading.local):
     @property
     def environ(self):
         return self._environ
-
-    # @property
-    # def request_method(self):
-    #     return self._environ['REQUEST_METHOD']
 
     @property
     def path(self):
@@ -609,45 +546,35 @@ class Router:
             self.static_routes[method][rule] = callback
         else:
             k = self._build_re(rule)
-            print(k)
             self.dynamic_routes[method][k] = callback
-
 
     @staticmethod
     def _build_re(rule):
-        slash_pattern = re.compile(r'/')
-        str_pattern = re.compile(r'<\s*([a-zA-Z_]\w+)\s*>')
-        int_pattern = re.compile(r'<\s*int:\s*([a-zA-Z_]\w+)\s*>')
-        float_pattern = re.compile(r'<\s*float:\s*([a-zA-Z_]\w+)\s*>')
-        re_pattern = re.compile(r'<\s*re:\s*(.+):\s*([a-zA-Z_]\w+)\s*>')
+        slash_pat = re.compile(r'/')
+        str_pat = re.compile(r'<\s*([a-zA-Z_]\w+)\s*>')
+        int_pat = re.compile(r'<\s*int:\s*([a-zA-Z_]\w+)\s*>')
+        float_pat = re.compile(r'<\s*float:\s*([a-zA-Z_]\w+)\s*>')
         re_list = ['^/']
         arg_list = []
 
         if rule.startswith('/'):
             rule = rule[1:]
 
-        for seg in slash_pattern.split(rule):
-            if str_pattern.match(seg):
-                arg_name = str_pattern.match(seg).group(1)
+        for seg in slash_pat.split(rule):
+            if str_pat.match(seg):
+                arg_name = str_pat.match(seg).group(1)
                 arg_list.append(arg_name)
                 re_list.append(r'(?P<%s>\w+)' % arg_name)
                 re_list.append('/')
-            elif int_pattern.match(seg):
-                arg_name = int_pattern.match(seg).group(1)
+            elif int_pat.match(seg):
+                arg_name = int_pat.match(seg).group(1)
                 arg_list.append(arg_name + '_int_')
                 re_list.append(r'(?P<%s>\d+)' % arg_name)
                 re_list.append('/')
-            elif float_pattern.match(seg):
-                arg_name = float_pattern.match(seg).group(1)
+            elif float_pat.match(seg):
+                arg_name = float_pat.match(seg).group(1)
                 arg_list.append(arg_name + '_float_')
-                re_list.append(r'(?P<%s>\d+\.\d+)' % arg_name)
-                re_list.append('/')
-            elif re_pattern.match(seg):
-                re_result = re_pattern.match(seg)
-                inner_re = re_result.group(1)
-                arg_name = re_result.group(2)
-                arg_list.append(arg_name)
-                re_list.append(r'(?P<%s>%s)' % (arg_name, inner_re))
+                re_list.append(r'(?P<%s>-?\d+\.\d{1,13})' % arg_name)
                 re_list.append('/')
             else:
                 re_list.append(seg)
@@ -674,21 +601,24 @@ class Router:
                         params[index] = int(params[index])
                     if arg.endswith('_float_'):
                         params[index] = float(params[index])
-                print(dynamic_func)
-                print(params)
+
                 return dynamic_func(*params)
 
         # method not allowed
-        for route in self.static_routes.values():
+        for met, route in self.static_routes.items():
+            if met == method:
+                continue
             if route.get(url) is not None:
-                not_allowed()
+                raise not_allowed()
 
-        for route in self.dynamic_routes.values():
+        for met, route in self.dynamic_routes.items():
+            if met == method:
+                continue
             for pair in route.keys():
                 if re.compile(pair[0]).match(url) is not None:
-                    not_allowed()
+                    raise not_allowed()
         # no match
-        not_found()
+        raise not_found()
 
 
 class Route:
@@ -713,7 +643,8 @@ class MinimTemplate(BaseTemplate):
 
 
 class Minim:
-    def __init__(self, template_dir=None, Static_dir=None, auto_json=True, **kw):
+    def __init__(self, import_name=__name__, template_dir=None, Static_dir=None, auto_json=True, **kw):
+        self.import_name = import_name
         self._running = False
         self._router = Router()
         self._routes = []
@@ -767,7 +698,6 @@ class Minim:
         return _decorator
 
     def _handle(self):
-        # self.match()
         pass
 
     def _cast(self, out):
@@ -778,8 +708,6 @@ class Minim:
             response.set_header('Content-Length', '0')
         elif isinstance(out, str):
             out = [out.encode('utf-8')]
-        # elif isinstance(out, (int, float)):
-        #     out = str(out).encode('utf-8')
         elif isinstance(out, bytes):
             out = [out]
         elif hasattr(out, 'read'):
@@ -810,53 +738,6 @@ class Minim:
         server = make_server(host, port, self)
         server.serve_forever()
 
-    # def get_wsgi_app(self):
-    #     self._check_not_running()
-    #
-    #     self._running = True
-    #
-    #     def fn_route():
-    #         request_method = ctx.request.request_method
-    #         path_info = ctx.request.path_info
-    #         if request_method == 'GET':
-    #             fn = self._get_static.get(path_info, None)
-    #             if fn:
-    #                 return fn()
-    #             for fn in self._get_dynamic:
-    #                 args = fn.match(path_info)
-    #                 if args:
-    #                     return fn(*args)
-    #             raise notfound()
-    #         if request_method == 'POST':
-    #             fn = self._post_static.get(path_info, None)
-    #             if fn:
-    #                 return fn()
-    #             for fn in self._post_dynamic:
-    #                 args = fn.match(path_info)
-    #                 if args:
-    #                     return fn(*args)
-    #             raise notfound()
-    #         raise badrequest()
-    #
-    #     def wsgi(env, start_response):
-    #         ctx.request = Request(env)
-    #         response = ctx.response = Response()
-    #         start_response('200 OK', [('Content-Type', 'text/plain')])
-    #         r = fn_route()
-    #         return self._cast(r)
-    #
-    #     return wsgi
-
-    # def add_interceptor(self, func):
-    #     pass
-    #
-    # @property
-    # def template_engine(self):
-    #     return None
-    #
-    # @template_engine.setter
-    # def template_engine(self, engine):
-    #     pass
 
 # Module initialization
 

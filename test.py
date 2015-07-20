@@ -88,7 +88,6 @@ app = Minim()
 
 @app.get('/')
 def index():
-    print(request.query_string)
     return 'hello minim'
 
 
@@ -97,21 +96,24 @@ def index():
 #     print(request.query_string)
 #     return 'hello minim'
 
-@app.get('/blog/<int:bar>/<foo>')
-def blog(bar, foo):
+@app.post('/cymoo')
+def cymoo():
+    return 'void'
+
+
+@app.route('/gt', methods=['GET', 'POST'])
+def gt():
+    if request.method == 'GET':
+        return 'it is get method'
+    elif request.method == 'POST':
+        return 'it is post method'
+    else:
+        print('else')
+
+
+@app.get('/<float:bar>')
+def blog(bar):
+    print(type(bar))
     print(bar)
-    print(foo)
-    # response.set_header('cymoo', 'keep calm and carry on')
-    # response.set_cookie('logged', 'yes')
     return str(bar)
-
 app.run()
-
-
-
-
-
-
-
-
-
