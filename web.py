@@ -250,13 +250,6 @@ def internal_error():
     return HttpError(500)
 
 
-def redirect(location):
-    """
-    Do permanent redirect.
-    """
-    return RedirectError(301, location)
-
-
 def found(location):
     """
     Do temporary redirect.
@@ -292,48 +285,6 @@ def _to_bytes(s):
         return s
 
 
-# def _static_file_generator(fpath):
-#     block_size = 8192
-#     with open(fpath, 'rb') as f:
-#         block = f.read(block_size)
-#         while block:
-#             yield block
-#             block = f.read(block_size)
-#
-#
-# class StaticFileRoute:
-#     def __init__(self):
-#         self.method = 'GET'
-#         self.is_static = False
-#         self.route = re.compile(r'^/static/(.+)$')
-#
-#     def match(self, url):
-#         if url.startswith('/static/'):
-#             return (url[1:],)
-#         return None
-#
-#     def __call__(self, *args):
-#         fpath = os.path.join(ctx.application.document_root, args[0])
-#         if not os.path.isfile(fpath):
-#             raise not_found()
-#         fext = os.path.splitext(fpath)[1]
-#         ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
-#         return _static_file_generator(fpath)
-#
-#
-# def favicon_handler():
-#     return static_file_handler('/favicon.ico')
-#
-#
-# class MultipartFile:
-#     """
-#     Multipart file storage get from request input
-#     """
-#     def __init__(self, storage):
-#         self.filename = storage.filename
-#         self.file = storage.file
-
-
 class Request(threading.local):
     def __init__(self, environ=None):
         super().__init__()
@@ -355,7 +306,7 @@ class Request(threading.local):
 
     @property
     def query_string(self):
-        return self._environ.get('QUERY_STRING', '')
+        return self._environ.get('QUERY_STRING')
 
     @property
     def input_length(self):
@@ -367,28 +318,26 @@ class Request(threading.local):
     # um, what is PEP8? Is it delicious?
     @property
     def GET(self):
-        if self._GET is None:
-            raw_dict = urllib.parse.parse_qs(self.query_string, keep_blank_values=True)
-            self._GET = Dict()
-            for key, value in raw_dict.items():
-                if len(value) == 1:
-                    self._GET[key] = value[0]
-                else:
-                    self._GET[key] = value
+        raw_dict = urllib.parse.parse_qs(self.query_string, keep_blank_values=True)
+        self._GET = Dict()
+        for key, value in raw_dict.items():
+            if len(value) == 1:
+                self._GET[key] = value[0]
+            else:
+                self._GET[key] = value
         return self._GET
 
     @property
     def POST(self):
-        if self._POST is None:
-            raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
-            self._POST = Dict()
-            for key in raw_data:
-                if isinstance(raw_data[key], list):
-                    self._POST[key] = [v.value for v in raw_data[key]]
-                elif raw_data[key].filename:
-                    self._POST[key] = raw_data[key]
-                else:
-                    self._POST[key] = raw_data[key].value
+        raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
+        self._POST = Dict()
+        for key in raw_data:
+            if isinstance(raw_data[key], list):
+                self._POST[key] = [v.value for v in raw_data[key]]
+            elif raw_data[key].filename:
+                self._POST[key] = raw_data[key]
+            else:
+                self._POST[key] = raw_data[key].value
         return self._POST
 
     @property
@@ -421,6 +370,19 @@ class Request(threading.local):
     @property
     def environ(self):
         return self._environ
+
+    @property
+    def is_xhr(self):
+        requested_with = self._environ.get('HTTP_X_REQUESTED_WITH', '')
+        return requested_with.lower() == 'xmlhttprequest'
+
+    @property
+    def is_ajax(self):
+        return self.is_xhr
+
+    @property
+    def content_type(self):
+        return self._environ.get('CONTENT_TYPE', '').lower()
 
     @property
     def path(self):
@@ -519,6 +481,32 @@ class Response(threading.local):
         kw['max_age'] = -1
         kw['expires'] = 0
         self.set_cookie(key, '', **kw)
+
+
+def redirect(url, code=None):
+    if not code:
+        code = 303 if request.environ.get('SERVER_PROTOCOL') == 'HTTP/1.1' else 302
+    response.status = code
+    response.set_header('Location', url)
+    return response
+
+
+def send_file(directory, filename):
+    filepath = os.path.join(directory, filename)
+    if not os.path.isfile(filepath):
+        raise not_found()
+    mime_type = mimetypes.guess_type(filepath)[0] or 'application/octet-stream'
+    response.set_header('content-type', mime_type)
+
+    def _static_file_generator(path):
+        block_size = 8192
+        with open(path, 'rb') as f:
+            block = f.read(block_size)
+            while block:
+                yield block
+                block = f.read(block_size)
+
+    return _static_file_generator(filepath)
 
 
 class Router:
@@ -649,16 +637,12 @@ class Minim:
         self._router = Router()
         self._routes = []
         self.auto_json = auto_json
+        self._before_request_func = None
+        self._after_request_func = None
 
     def _is_running(self):
         if self._running:
             raise RuntimeError('A WSGIApplication is already running.')
-
-    def before_request(self):
-        pass
-
-    def after_request(self):
-        pass
 
     def get(self, rule, methods='GET'):
         return self.route(rule=rule, methods=methods)
@@ -681,6 +665,14 @@ class Minim:
     def error(self, code=500):
         pass
 
+    def before_request(self, func):
+        self._before_request_func = func
+        return func
+
+    def after_request(self, func):
+        self._after_request_func = func
+        return func
+
     def match(self):
         return self._router.match()
 
@@ -697,8 +689,23 @@ class Minim:
             return func
         return _decorator
 
-    def _handle(self):
-        pass
+    def _handle(self, environ):
+        try:
+            request.bind(environ)
+            # should not set that here, but something curious with the thread stuff; just for test
+            response.set_header('content-type', 'text/html; charset=UTF-8')
+            response.status = 200
+            try:
+                if self._before_request_func is not None:
+                    self._before_request_func()
+                return self.match()
+            finally:
+                if self._after_request_func is not None:
+                    self._after_request_func()
+        except (KeyboardInterrupt, SystemExit, MemoryError):
+            raise
+        except Exception:
+            raise
 
     def _cast(self, out):
         if self.auto_json and isinstance(out, (dict, list)):
@@ -724,9 +731,9 @@ class Minim:
         pass
 
     def wsgi(self, environ, start_response):
-        request.bind(environ)
+        out = self._cast(self._handle(environ))
         start_response(response.status, response.headers)
-        out = self._cast(self.match())
+
         return out
 
     def __call__(self, environ, start_response):
@@ -743,4 +750,4 @@ class Minim:
 
 request = Request()
 response = Response()
-local = threading.local()
+g = threading.local()
