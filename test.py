@@ -103,7 +103,7 @@ def favicon():
     basedir = os.path.abspath(os.path.dirname(__file__))
     directory = os.path.join(basedir, 'test')
     foo = send_file(directory, 'favicon.ico')
-    print(response.headers)
+    # print(response.headers)
     return foo
 
 
@@ -118,16 +118,17 @@ def avatar():
 
 @app.get('/')
 def index():
-    # for k, v in request.environ.items():
-    #     print(k, v)
+    for k, v in request.environ.items():
+        print(k, v)
     # print(request.environ.get('QUERY_STRING'))
     # print(request.GET.get('a'))
     if request.GET.get('a') == '13':
         print(request.GET.get('a', None))
         redirect('http://127.0.0.1:9000/cymoo')
     else:
-        print('no redirect')
-    print(response.status)
+        # print('no redirect')
+        pass
+    # print(response.status)
     # time.sleep(10)
     # print(time.time())
     return '<h1 style="text-align: center;">Hello Minim</h1>'

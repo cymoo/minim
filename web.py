@@ -309,6 +309,10 @@ class Request(threading.local):
         return self._environ.get('QUERY_STRING')
 
     @property
+    def content_type(self):
+        return self._environ.get('CONTENT_TYPE', '').lower()
+
+    @property
     def input_length(self):
         try:
             return max(0, int(self._environ.get('CONTENT_LENGTH', '0')))
@@ -379,10 +383,6 @@ class Request(threading.local):
     @property
     def is_ajax(self):
         return self.is_xhr
-
-    @property
-    def content_type(self):
-        return self._environ.get('CONTENT_TYPE', '').lower()
 
     @property
     def path(self):
