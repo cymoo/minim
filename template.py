@@ -52,7 +52,7 @@ class TemplateSyntaxError(TemplateError):
         return "'%s' seems like invalid syntax" % self.error_syntax
 
 
-# eval is very very dangerous; use ast.literal_eval when possible
+# eval is powerful but dangerous; use ast.literal_eval when it's possible
 def eval_expression(expr):
     try:
         return 'literal', ast.literal_eval(expr)
@@ -69,6 +69,8 @@ def resolve(name, context):
         for tok in name.split('.'):
             if isinstance(context, dict):
                 context = context[tok]
+            elif isinstance(context, list):
+                context = context[int(tok)]
             else:
                 context = eval('context.%s' % tok)
         return context
@@ -317,23 +319,21 @@ if __name__ == '__main__':
     class Foo:
         tmp = Bar()
     ego = Foo()
+
+    class Cici:
+        def __init__(self, var):
+            self.var = var
+
     # raw = r'<div>{{ my_var }}</div>'
-    raw = '''
-    <ul>
-     {% each my_var %}
-        <li>{{ item }}</li>
-     {% end %}
-    </ul>
-    <p>{{ yr_var.foo.bar }}</p>
-    <p>{{ the_var.tmp.tmp1.b }}</p>
-    <p>{{ that_var }}</p>
-    '''
+    raw = r'<ul>{% each vars %}<li>{{ item.name.var }}</li>{% end %}</ul>'
     frags = TOK_REGEX.split(raw)
     print(frags)
     # # raw = '<div>{{ my_var }}</div>'
     template = Template(raw)
     print(template.root.children)
 
-    html = template.render(my_var=['cymoo', 'colleen'], yr_var={'foo': {'bar': 'hi, judy!'}}, the_var=ego,
-                           that_var=[1, 3, 5])
+    vars = [{'name': Cici('cymoo')}, {'name': Cici('colleen')}]
+    # html = template.render(my_var=['cymoo', 'colleen'], yr_var={'foo': {'bar': 'hi, judy!'}}, the_var=ego,
+    #                        that_var=[1, 3, 5], whos_var={'a': Bar()})
+    html = template.render(vars=vars)
     print(html)
