@@ -621,24 +621,21 @@ class Cache:
     pass
 
 
-class BaseTemplate:
-    def __call__(self, path, model):
-        pass
-
-
-class MinimTemplate(BaseTemplate):
-    pass
-
-
 class Minim:
-    def __init__(self, import_name=__name__, template_dir=None, Static_dir=None, auto_json=True, **kw):
+    def __init__(self, import_name=__name__, template_path=None, static_path=None,
+                 template_folder='templates', static_folder='static', auto_json=True, **kw):
         self.import_name = import_name
+        self.template_path = template_path
+        self.static_path = static_path
+        self.template_folder = template_folder
+        self.static_folder = static_folder
         self._running = False
         self._router = Router()
         self._routes = []
         self.auto_json = auto_json
         self._before_request_func = None
         self._after_request_func = None
+        app_stack.push(self)
 
     def _is_running(self):
         if self._running:
@@ -724,9 +721,6 @@ class Minim:
             raise TypeError('Request handler returned [%s] which is not iterable.' % type(out).__name__)
         return out
 
-    def render(self):
-        pass
-
     def cached(self, max_age=None, max_page_num=None):
         pass
 
@@ -746,8 +740,40 @@ class Minim:
         server.serve_forever()
 
 
+def render(template_name, **kwargs):
+    from template import MiniTemplate
+    app = app_stack.head
+    if app.template_path is None:
+        app.template_path = os.getcwd()
+    full_path = os.path.join(app.template_path, app.template_folder, template_name)
+
+    with open(full_path) as f:
+        contents = f.read()
+        tpl = MiniTemplate(contents)
+
+    return tpl.render(**kwargs)
+
+
+class AppStack(list):
+    """
+    A stack-like list. Calling it returns the head of the stack.
+    """
+    @property
+    def head(self):
+        return self[-1]
+
+    def push(self, ins):
+        """
+        Add a new 'Minim' instance to the stack
+        """
+        if not isinstance(ins, Minim):
+            ins = Minim()
+        self.append(ins)
+        return ins
+
 # Module initialization
 
 request = Request()
 response = Response()
 g = threading.local()
+app_stack = AppStack()

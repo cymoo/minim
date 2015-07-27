@@ -81,90 +81,96 @@ from web import Minim, response_header_dict, Route, Router
 
 # print(response_header_dict)
 
-from web import Minim, response, request, redirect, send_file
-import time
-import os
-
-app = Minim()
-
-
-# @app.before_request
-# def defore_request():
-#     print('before request')
+# from web import Minim, response, request, redirect, send_file
+# import time
+# import os
+#
+# app = Minim()
 #
 #
-# @app.after_request
-# def after_request():
+# # @app.before_request
+# # def defore_request():
+# #     print('before request')
+# #
+# #
+# # @app.after_request
+# # def after_request():
+# #     print(response.headers)
+#
+#
+# @app.get('/favicon.ico')
+# def favicon():
+#     basedir = os.path.abspath(os.path.dirname(__file__))
+#     directory = os.path.join(basedir, 'test')
+#     foo = send_file(directory, 'favicon.ico')
+#     # print(response.headers)
+#     return foo
+#
+#
+# @app.get('/avatar')
+# def avatar():
+#     basedir = os.path.abspath(os.path.dirname(__file__))
+#     directory = os.path.join(basedir, 'test')
+#     foo = send_file(directory, 'infinite.jpg')
 #     print(response.headers)
-
-
-@app.get('/favicon.ico')
-def favicon():
-    basedir = os.path.abspath(os.path.dirname(__file__))
-    directory = os.path.join(basedir, 'test')
-    foo = send_file(directory, 'favicon.ico')
-    # print(response.headers)
-    return foo
-
-
-@app.get('/avatar')
-def avatar():
-    basedir = os.path.abspath(os.path.dirname(__file__))
-    directory = os.path.join(basedir, 'test')
-    foo = send_file(directory, 'infinite.jpg')
-    print(response.headers)
-    return foo
-
-
-@app.get('/')
-def index():
-    for k, v in request.environ.items():
-        print(k, v)
-    # print(request.environ.get('QUERY_STRING'))
-    # print(request.GET.get('a'))
-    if request.GET.get('a') == '13':
-        print(request.GET.get('a', None))
-        redirect('http://127.0.0.1:9000/cymoo')
-    else:
-        # print('no redirect')
-        pass
-    # print(response.status)
-    # time.sleep(10)
-    # print(time.time())
-    return '<h1 style="text-align: center;">Hello Minim</h1>'
-
-
-# @app.post('/')
+#     return foo
+#
+#
+# @app.get('/')
 # def index():
-#     print(request.query_string)
-#     return 'hello minim'
+#     for k, v in request.environ.items():
+#         print(k, v)
+#     # print(request.environ.get('QUERY_STRING'))
+#     # print(request.GET.get('a'))
+#     if request.GET.get('a') == '13':
+#         print(request.GET.get('a', None))
+#         redirect('http://127.0.0.1:9000/cymoo')
+#     else:
+#         # print('no redirect')
+#         pass
+#     # print(response.status)
+#     # time.sleep(10)
+#     # print(time.time())
+#     return '<h1 style="text-align: center;">Hello Minim</h1>'
+#
+#
+# # @app.post('/')
+# # def index():
+# #     print(request.query_string)
+# #     return 'hello minim'
+#
+# @app.get('/cymoo')
+# def cymoo():
+#     for k, v in request.environ.items():
+#         print(k, v)
+#     # response.status = 200
+#     # print(request.environ.get('QUERY_STRING', 'none'))
+#     # print(response.status)
+#     # print('cymoo')
+#     return 'void'
+#
+#
+# @app.route('/gt', methods=['GET', 'POST'])
+# def gt():
+#     if request.method == 'GET':
+#         return 'GET method'
+#     elif request.method == 'POST':
+#         return 'POST method'
+#     else:
+#         print('else')
+#
+#
+# @app.get('/<float:bar>')
+# def blog(bar):
+#     print(type(bar))
+#     print(bar)
+#     return str(bar)
+#
+#
+# app.run()
 
-@app.get('/cymoo')
-def cymoo():
-    for k, v in request.environ.items():
-        print(k, v)
-    # response.status = 200
-    # print(request.environ.get('QUERY_STRING', 'none'))
-    # print(response.status)
-    # print('cymoo')
-    return 'void'
-
-
-@app.route('/gt', methods=['GET', 'POST'])
-def gt():
-    if request.method == 'GET':
-        return 'GET method'
-    elif request.method == 'POST':
-        return 'POST method'
-    else:
-        print('else')
-
-
-@app.get('/<float:bar>')
-def blog(bar):
-    print(type(bar))
-    print(bar)
-    return str(bar)
-
-
-app.run()
+from template import MiniTemplate
+contents = '<ul>{% foreach my_var %}<li>{{ item }}</li>{% end %}</ul>'
+my_var = [1, 3]
+tpl = MiniTemplate(contents)
+print(tpl.render(my_var=my_var))

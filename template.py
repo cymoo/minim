@@ -7,17 +7,22 @@ VAR_FRAGMENT = 0
 OPEN_BLOCK_FRAGMENT = 1
 CLOSE_BLOCK_FRAGMENT = 2
 TEXT_FRAGMENT = 3
+COMMENT_FRAGMENT = 4
 
 VAR_TOKEN_START = '{{'
 VAR_TOKEN_END = '}}'
+COMMENT_TOKEN_START = '{#'
+COMMENT_TOKEN_END = '#}'
 BLOCK_TOKEN_START = '{%'
 BLOCK_TOKEN_END = '%}'
 
-TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s)' % (
+TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
     VAR_TOKEN_START,
     VAR_TOKEN_END,
     BLOCK_TOKEN_START,
-    BLOCK_TOKEN_END
+    BLOCK_TOKEN_END,
+    COMMENT_TOKEN_START,
+    COMMENT_TOKEN_END
 ))
 
 WHITESPACE = re.compile('\s+')
@@ -34,6 +39,14 @@ operator_lookup_table = {
 
 class TemplateError(Exception):
     pass
+
+
+class TemplateNotFoundError(TemplateError):
+    def __init__(self, path):
+        self.path = path
+
+    def __str__(self):
+        return "cannot find template: '%s'" % self.path
 
 
 class TemplateContextError(TemplateError):
@@ -55,16 +68,21 @@ class TemplateSyntaxError(TemplateError):
 # eval is powerful but dangerous; use ast.literal_eval when it's possible
 def eval_expression(expr):
     try:
-        return 'literal', ast.literal_eval(expr)
-    except (ValueError, SyntaxError):
+        # return 'eval', ast.literal_eval(expr)
+        return 'eval', eval(expr)
+    except (NameError, ValueError, SyntaxError):
         return 'name', expr
 
 
 def resolve(name, context):
+    # print('name, context', name, context)
     # test~
     if name.startswith('..'):
         context = context.get('..', {})
         name = name[2:]
+
+    # foo = name.split('.')[0]
+    # if foo in context:
     try:
         for tok in name.split('.'):
             if isinstance(context, dict):
@@ -76,6 +94,11 @@ def resolve(name, context):
         return context
     except KeyError:
         raise TemplateContextError(name)
+    # else:
+    #     try:
+    #         return eval(name)
+    #     except (NameError, SyntaxError):
+    #         raise TemplateSyntaxError(name)
 
 
 class _Fragment:
@@ -95,6 +118,8 @@ class _Fragment:
             return VAR_FRAGMENT
         elif raw_start == BLOCK_TOKEN_START:
             return CLOSE_BLOCK_FRAGMENT if self.clean[:3] == 'end' else OPEN_BLOCK_FRAGMENT
+        elif raw_start == COMMENT_TOKEN_START:
+            return COMMENT_FRAGMENT
         else:
             return TEXT_FRAGMENT
 
@@ -119,7 +144,7 @@ class _Node:
         pass
 
     def render_children(self, context, children=None):
-        print('context', context)
+        # print('context', context)
         if children is None:
             children = self.children
 
@@ -154,7 +179,12 @@ class _Variable(_Node):
         return resolve(self.name, context)
 
 
-class _Each(_ScopableNode):
+class _Comment(_Node):
+    def render(self, context):
+        return ''
+
+
+class _ForEach(_ScopableNode):
     def process_fragment(self, fragment):
         try:
             _, it = WHITESPACE.split(fragment, 1)
@@ -163,11 +193,11 @@ class _Each(_ScopableNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
-        items = self.it[1] if self.it[0] == 'literal' else resolve(self.it[1], context)
-        print(items)
+        items = self.it[1] if self.it[0] == 'eval' else resolve(self.it[1], context)
+        # print(items)
 
         def render_item(item):
-            return self.render_children({'..': context, 'item': item})
+            return self.render_children({'..': context, 'it': item})
         return ''.join(map(render_item, items))
 
 
@@ -176,27 +206,28 @@ class _If(_ScopableNode):
         bits = fragment.split()[1:]
         if len(bits) not in (1, 3):
             raise TemplateSyntaxError(fragment)
-        self.lhs = eval_expression(bits[0])
+        self.ls = eval_expression(bits[0])
         if len(bits) == 3:
             self.op = bits[1]
-            self.rhs = eval_expression(bits[2])
+            self.rs = eval_expression(bits[2])
 
     def render(self, context):
-        lhs = self.resolve_side(self.lhs, context)
+        ls = self.resolve_side(self.ls, context)
         if hasattr(self, 'op'):
             op = operator_lookup_table.get(self.op)
             if op is None:
                 raise TemplateSyntaxError(self.op)
-            rhs = self.resolve_side(self.rhs, context)
-            exec_if_branch = op(lhs, rhs)
+            rs = self.resolve_side(self.rs, context)
+            exec_if_branch = op(ls, rs)
         else:
-            exec_if_branch = operator.truth(lhs)
-        if_branch, else_branch = self.split_children()
+            exec_if_branch = operator.truth(ls)
+        # if_branch, else_branch = self.split_children()
+        # print('split children', self.split_children())
         return self.render_children(context,
             self.if_branch if exec_if_branch else self.else_branch)
 
     def resolve_side(self, side, context):
-        return side[1] if side[0] == 'literal' else resolve(side[1], context)
+        return side[1] if side[0] == 'eval' else resolve(side[1], context)
 
     def exit_scope(self):
         self.if_branch, self.else_branch = self.split_children()
@@ -204,12 +235,18 @@ class _If(_ScopableNode):
     def split_children(self):
         if_branch, else_branch = [], []
         curr = if_branch
+        # print('children', self.children)
         for child in self.children:
             if isinstance(child, _Else):
                 curr = else_branch
                 continue
             curr.append(child)
         return if_branch, else_branch
+
+
+class _Elif(_Node):
+    def render(self, context):
+        pass
 
 
 class _Else(_Node):
@@ -253,7 +290,7 @@ class _Call(_Node):
             raise TemplateError("'%s' is not a callable" % self.callable)
 
 
-class Compiler(object):
+class Compiler:
     def __init__(self, template_string):
         self.template_string = template_string
 
@@ -287,53 +324,75 @@ class Compiler(object):
             node_class = _Text
         elif fragment.type == VAR_FRAGMENT:
             node_class = _Variable
+        elif fragment.type == COMMENT_FRAGMENT:
+            node_class = _Comment
         elif fragment.type == OPEN_BLOCK_FRAGMENT:
             cmd = fragment.clean.split()[0]
-            if cmd == 'each':
-                node_class = _Each
+            if cmd == 'foreach':
+                node_class = _ForEach
             elif cmd == 'if':
                 node_class = _If
+            elif cmd == 'elif':
+                node_class = _Elif
             elif cmd == 'else':
                 node_class = _Else
             elif cmd == 'call':
                 node_class = _Call
+            else:
+                pass
         if node_class is None:
             raise TemplateSyntaxError(fragment)
         return node_class(fragment.clean)
 
 
-class Template(object):
-    def __init__(self, contents):
+class MiniTemplate:
+    global_context = {}
+
+    def __init__(self, contents=None):
         self.contents = contents
         self.root = Compiler(contents).compile()
 
+    # The injected context will be replaced by the local context.
+    @classmethod
+    def inject(cls, name, value):
+        if not isinstance(name, str):
+            raise Exception("<class 'str'> expected, but type of %s is %s." % (name, type(name)))
+        cls.global_context[name] = value
+
     def render(self, **kwargs):
-        return self.root.render(kwargs)
+        merged_kwargs = self.global_context.copy()
+        merged_kwargs.update(kwargs)
+        return self.root.render(merged_kwargs)
 
 
 if __name__ == '__main__':
 
-    class Bar:
-        tmp1 = {'a': 131, 'b': 313}
-
-    class Foo:
-        tmp = Bar()
-    ego = Foo()
-
-    class Cici:
-        def __init__(self, var):
-            self.var = var
+    # class Bar:
+    #     tmp1 = {'a': 131, 'b': 313}
+    #
+    # class Foo:
+    #     tmp = Bar()
+    # ego = Foo()
+    #
+    # class Cici:
+    #     def __init__(self, var):
+    #         self.var = var
 
     # raw = r'<div>{{ my_var }}</div>'
-    raw = r'<ul>{% each vars %}<li>{{ item.name.var }}</li>{% end %}</ul>'
+    mylist = ['13', '31', '131']
+    MiniTemplate.inject('var3', mylist)
+    var = 14
+    vars = ['cymoo', 'colleen']
+    raw = r'''{% if var == 13 %}<p>醒醒我们回家了</p>{% else %}{% foreach vars %}<i>{{ item }}</i>{% end %}{% end %}'''
+    # raw = r'<ul>{% foreach vars%}<li>{{ item }}</li>{% end %}'
     frags = TOK_REGEX.split(raw)
     print(frags)
     # # raw = '<div>{{ my_var }}</div>'
-    template = Template(raw)
-    print(template.root.children)
+    template = MiniTemplate(raw)
+    # print(template.root.children)
 
-    vars = [{'name': Cici('cymoo')}, {'name': Cici('colleen')}]
+    # vars = [{'name': Cici('cymoo')}, {'name': Cici('colleen')}]
     # html = template.render(my_var=['cymoo', 'colleen'], yr_var={'foo': {'bar': 'hi, judy!'}}, the_var=ego,
     #                        that_var=[1, 3, 5], whos_var={'a': Bar()})
-    html = template.render(vars=vars)
+    html = template.render(var=var, vars=vars)
     print(html)
