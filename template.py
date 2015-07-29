@@ -46,7 +46,7 @@ class TemplateNotFoundError(TemplateError):
         self.path = path
 
     def __str__(self):
-        return "cannot find template: '%s'" % self.path
+        return "cannot find template file: '%s'" % self.path
 
 
 class TemplateContextError(TemplateError):
@@ -66,10 +66,13 @@ class TemplateSyntaxError(TemplateError):
 
 
 # eval is powerful but dangerous; use ast.literal_eval when it's possible
-def eval_expression(expr):
+def eval_expression(expr, global_context=None, local_context=None):
     try:
         # return 'eval', ast.literal_eval(expr)
-        return 'eval', eval(expr)
+        if local_context is None:
+            return 'eval', eval(expr)
+        else:
+            return 'eval', eval(expr, globals=global_context, locals=local_context)
     except (NameError, ValueError, SyntaxError):
         return 'name', expr
 
@@ -176,12 +179,44 @@ class _Variable(_Node):
         self.name = fragment
 
     def render(self, context):
-        return resolve(self.name, context)
+        value = resolve(self.name, context)
+        return value
 
 
 class _Comment(_Node):
     def render(self, context):
         return ''
+
+
+class _Set(_ScopableNode):
+    is_root_set = False
+    set_stack = []
+
+    def process_fragment(self, fragment):
+        _, expr = WHITESPACE.split(fragment, 1)
+        name, value = expr.split('=')
+        eval_value = eval_expression(value)[1]
+        self.new_dict = eval('dict(%s=eval_value)' % name)
+
+    def render(self, context):
+        if self.is_root_set:
+            del self.set_stack[:]
+            self.set_stack.append((context, self.new_dict))
+        else:
+            parent_context = self.set_stack[-1]
+            global_context = parent_context[0].copy()
+            global_context.update(parent_context[1])
+            self.set_stack.append((global_context, self.new_dict))
+        return self.render_children(context)
+
+    def render_children(self, context, children=None):
+        pass
+
+    def enter_scope(self):
+        pass
+
+    def exit_scope(self):
+        pass
 
 
 class _ForEach(_ScopableNode):
@@ -254,6 +289,15 @@ class _Else(_Node):
         pass
 
 
+class _Raw(_Node):
+    def process_fragment(self, fragment):
+        _, expr = WHITESPACE.split(fragment, 1)
+        self.expr = expr
+
+    def render(self, context):
+        return eval(self.expr)
+
+
 class _Call(_Node):
     def process_fragment(self, fragment):
         try:
@@ -314,6 +358,10 @@ class Compiler:
             if new_node:
                 parent_scope.children.append(new_node)
                 if new_node.creates_scope:
+                    if isinstance(new_node, _Set) and len(scope_stack) == 1:
+                        new_node.is_root_set = True
+                    else:
+                        new_node.is_root_set = False
                     scope_stack.append(new_node)
                     new_node.enter_scope()
         return root
@@ -338,6 +386,10 @@ class Compiler:
                 node_class = _Else
             elif cmd == 'call':
                 node_class = _Call
+            elif cmd == 'set':
+                node_class = _Set
+            elif cmd == 'raw':
+                node_class = _Raw
             else:
                 pass
         if node_class is None:
@@ -351,6 +403,7 @@ class MiniTemplate:
     def __init__(self, contents=None):
         self.contents = contents
         self.root = Compiler(contents).compile()
+        print(self.root.children)
 
     # The injected context will be replaced by the local context.
     @classmethod
@@ -379,14 +432,27 @@ if __name__ == '__main__':
     #         self.var = var
 
     # raw = r'<div>{{ my_var }}</div>'
-    mylist = ['13', '31', '131']
-    MiniTemplate.inject('var3', mylist)
-    var = 14
+    # mylist = ['13', '31', '131']
+    # MiniTemplate.inject('var3', mylist)
+    var = 'test'
+    foo = 'cymoo'
     vars = ['cymoo', 'colleen']
-    raw = r'''{% if var == 13 %}<p>醒醒我们回家了</p>{% else %}{% foreach vars %}<i>{{ item }}</i>{% end %}{% end %}'''
+    # raw = r'''{% if var == 13 %}<p>醒醒我们回家了</p>{% else %}{% foreach vars %}<i>{{ item }}</i>{% end %}{% end %}'''
     # raw = r'<ul>{% foreach vars%}<li>{{ item }}</li>{% end %}'
+    raw = r"""
+    {% set var13="wake up,we have to go home" %}
+        {% set var13="醒醒我们回家了" %}
+        {{ var }}
+        {% end %}
+    {{ var }}
+    {% end %}
+    *hello set*
+    {% set var15="keep calm and carry on" %}
+    {{ var }}
+    {% end %}
+    """
     frags = TOK_REGEX.split(raw)
-    print(frags)
+    # print(frags)
     # # raw = '<div>{{ my_var }}</div>'
     template = MiniTemplate(raw)
     # print(template.root.children)
@@ -394,5 +460,5 @@ if __name__ == '__main__':
     # vars = [{'name': Cici('cymoo')}, {'name': Cici('colleen')}]
     # html = template.render(my_var=['cymoo', 'colleen'], yr_var={'foo': {'bar': 'hi, judy!'}}, the_var=ego,
     #                        that_var=[1, 3, 5], whos_var={'a': Bar()})
-    html = template.render(var=var, vars=vars)
+    html = template.render(var=var)
     print(html)
