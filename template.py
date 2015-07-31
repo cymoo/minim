@@ -27,14 +27,16 @@ TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
 
 WHITESPACE = re.compile('\s+')
 
-operator_lookup_table = {
-    '<': operator.lt,
-    '>': operator.gt,
-    '==': operator.eq,
-    '!=': operator.ne,
-    '<=': operator.le,
-    '>=': operator.ge
-}
+OPERATOR = re.compile('<=|>=|<|>|==|!=')
+
+# operator_lookup_table = {
+#     '<': operator.lt,
+#     '>': operator.gt,
+#     '==': operator.eq,
+#     '!=': operator.ne,
+#     '<=': operator.le,
+#     '>=': operator.ge
+# }
 
 
 class TemplateError(Exception):
@@ -65,24 +67,12 @@ class TemplateSyntaxError(TemplateError):
         return "'%s' seems like invalid syntax" % self.error_syntax
 
 
-# eval is powerful but dangerous; use ast.literal_eval when it's possible
-def eval_expression(expr, global_context=None, local_context=None):
-    try:
-        # return 'eval', ast.literal_eval(expr)
-        if local_context is None:
-            return 'eval', eval(expr)
-        else:
-            return 'eval', eval(expr, globals=global_context, locals=local_context)
-    except (NameError, ValueError, SyntaxError):
-        return 'name', expr
-
-
 def resolve(name, context):
     # print('name, context', name, context)
     # test~
-    if name.startswith('..'):
-        context = context.get('..', {})
-        name = name[2:]
+    # if name.startswith('..'):
+    #     context = context.get('..', {})
+    #     name = name[2:]
 
     # foo = name.split('.')[0]
     # if foo in context:
@@ -147,7 +137,6 @@ class _Node:
         pass
 
     def render_children(self, context, children=None):
-        # print('context', context)
         if children is None:
             children = self.children
 
@@ -177,9 +166,15 @@ class _Text(_Node):
 class _Variable(_Node):
     def process_fragment(self, fragment):
         self.name = fragment
+        # self.filter_callbacks = []
 
     def render(self, context):
-        value = resolve(self.name, context)
+        value = eval(self.name, context, {})
+        # filtered_value = value
+        # for callback in self.filter_callbacks:
+        #     filtered_value = callback(filtered_value, *args, **kw)
+        # return filtered_value
+
         return value
 
 
@@ -189,97 +184,98 @@ class _Comment(_Node):
 
 
 class _Set(_ScopableNode):
-    is_root_set = False
-    set_stack = []
 
     def process_fragment(self, fragment):
         _, expr = WHITESPACE.split(fragment, 1)
-        name, value = expr.split('=')
-        eval_value = eval_expression(value)[1]
-        self.new_dict = eval('dict(%s=eval_value)' % name)
+        self.var_name, self.value = expr.split('=')
 
     def render(self, context):
-        if self.is_root_set:
-            del self.set_stack[:]
-            self.set_stack.append((context, self.new_dict))
-        else:
-            parent_context = self.set_stack[-1]
-            global_context = parent_context[0].copy()
-            global_context.update(parent_context[1])
-            self.set_stack.append((global_context, self.new_dict))
-        return self.render_children(context)
-
-    def render_children(self, context, children=None):
-        pass
-
-    def enter_scope(self):
-        pass
-
-    def exit_scope(self):
-        pass
+        eval_value = eval(self.value, context, {})
+        new_dict = eval('dict(%s=eval_value)' % self.var_name)
+        set_context = context.copy()
+        set_context.update(new_dict)
+        return self.render_children(set_context)
 
 
-class _ForEach(_ScopableNode):
+class _For(_ScopableNode):
     def process_fragment(self, fragment):
         try:
-            _, it = WHITESPACE.split(fragment, 1)
-            self.it = eval_expression(it)
+            # _, it = WHITESPACE.split(fragment)
+            bits = WHITESPACE.split(fragment)
+            self.loop_var = bits[1]
+            self.raw_expr = bits[3]
+            # self.expr = eval(raw_expr)
         except ValueError:
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
-        items = self.it[1] if self.it[0] == 'eval' else resolve(self.it[1], context)
-        # print(items)
+        # print('for', context)
+        # items = self.expr[1] if self.expr[0] == 'eval' else resolve(self.expr[1], context)
+        items = eval(self.raw_expr, context, {})
 
         def render_item(item):
-            return self.render_children({'..': context, 'it': item})
+            inner_context = context.copy()
+            inner_context.update({self.loop_var: item})
+            return self.render_children(inner_context)
         return ''.join(map(render_item, items))
 
 
 class _If(_ScopableNode):
     def process_fragment(self, fragment):
-        bits = fragment.split()[1:]
-        if len(bits) not in (1, 3):
-            raise TemplateSyntaxError(fragment)
-        self.ls = eval_expression(bits[0])
-        if len(bits) == 3:
-            self.op = bits[1]
-            self.rs = eval_expression(bits[2])
+        self.expr = fragment.split()[1]
+        # bits = fragment.split()[1:]
+        # if len(bits) not in (1, 3):
+        #     raise TemplateSyntaxError(fragment)
+        # self.ls = eval_expression(bits[0])
+        # if len(bits) == 3:
+        #     self.op = bits[1]
+        #     self.rs = eval_expression(bits[2])
 
     def render(self, context):
-        ls = self.resolve_side(self.ls, context)
-        if hasattr(self, 'op'):
-            op = operator_lookup_table.get(self.op)
-            if op is None:
-                raise TemplateSyntaxError(self.op)
-            rs = self.resolve_side(self.rs, context)
-            exec_if_branch = op(ls, rs)
-        else:
-            exec_if_branch = operator.truth(ls)
-        # if_branch, else_branch = self.split_children()
-        # print('split children', self.split_children())
-        return self.render_children(context,
-            self.if_branch if exec_if_branch else self.else_branch)
+        pass
+        # ls = self.resolve_side(self.ls, context)
+        # if hasattr(self, 'op'):
+        #     op = operator_lookup_table.get(self.op)
+        #     if op is None:
+        #         raise TemplateSyntaxError(self.op)
+        #     rs = self.resolve_side(self.rs, context)
+        #     exec_if_branch = op(ls, rs)
+        # else:
+        #     exec_if_branch = operator.truth(ls)
+        # # if_branch, else_branch = self.split_children()
+        # return self.render_children(context,
+        #     self.if_branch if exec_if_branch else self.else_branch)
 
-    def resolve_side(self, side, context):
-        return side[1] if side[0] == 'eval' else resolve(side[1], context)
+    # def resolve_side(self, side, context):
+        # return side[1] if side[0] == 'eval' else resolve(side[1], context)
 
     def exit_scope(self):
-        self.if_branch, self.else_branch = self.split_children()
+        self.branches = self.split_children()
 
     def split_children(self):
-        if_branch, else_branch = [], []
-        curr = if_branch
+        branches = []
+        branch = []
+        # if_branch, else_branch = [], []
+        # curr = if_branch
         # print('children', self.children)
         for child in self.children:
-            if isinstance(child, _Else):
-                curr = else_branch
+            if isinstance(child, _Elif):
+                expr = child.expr
+                branch = []
                 continue
-            curr.append(child)
-        return if_branch, else_branch
+            if isinstance(child, _Else):
+                expr = 1
+                branch = []
+                continue
+
+            branch.append(child)
+        return branches
 
 
 class _Elif(_Node):
+    def process_fragment(self, fragment):
+        self.expr = fragment.split()[1]
+
     def render(self, context):
         pass
 
@@ -289,13 +285,12 @@ class _Else(_Node):
         pass
 
 
-class _Raw(_Node):
+class _Raw(_ScopableNode):
     def process_fragment(self, fragment):
-        _, expr = WHITESPACE.split(fragment, 1)
-        self.expr = expr
+        pass
 
     def render(self, context):
-        return eval(self.expr)
+        print(self.children)
 
 
 class _Call(_Node):
@@ -358,10 +353,6 @@ class Compiler:
             if new_node:
                 parent_scope.children.append(new_node)
                 if new_node.creates_scope:
-                    if isinstance(new_node, _Set) and len(scope_stack) == 1:
-                        new_node.is_root_set = True
-                    else:
-                        new_node.is_root_set = False
                     scope_stack.append(new_node)
                     new_node.enter_scope()
         return root
@@ -376,8 +367,8 @@ class Compiler:
             node_class = _Comment
         elif fragment.type == OPEN_BLOCK_FRAGMENT:
             cmd = fragment.clean.split()[0]
-            if cmd == 'foreach':
-                node_class = _ForEach
+            if cmd == 'for':
+                node_class = _For
             elif cmd == 'if':
                 node_class = _If
             elif cmd == 'elif':
@@ -434,25 +425,44 @@ if __name__ == '__main__':
     # raw = r'<div>{{ my_var }}</div>'
     # mylist = ['13', '31', '131']
     # MiniTemplate.inject('var3', mylist)
-    var = 'test'
+    var = 'testfool'
     foo = 'cymoo'
-    vars = ['cymoo', 'colleen']
+    # vars = ['cymoo', 'colleen']
     # raw = r'''{% if var == 13 %}<p>醒醒我们回家了</p>{% else %}{% foreach vars %}<i>{{ item }}</i>{% end %}{% end %}'''
     # raw = r'<ul>{% foreach vars%}<li>{{ item }}</li>{% end %}'
+    # raw = r"""
+    # {% set var13="wake up,we have to go home" %}
+    #     {% set var13="醒醒我们回家了" %}
+    #     {{ var }}
+    #     {% end %}
+    # {{ var }}
+    # {% end %}
+    # *hello set*
+    # """
+    # {% if foo=='cymoo' %}
+    # cymoo
+    # {% elif foo=='colleen' %}
+    # colleen
+    # {% elif foo=='wake-up' %}
+    # wake-up
+    # {% else %}
+    # end
+    # {% end %}
+
+    persons = ['cymoo', 'colleen']
     raw = r"""
-    {% set var13="wake up,we have to go home" %}
-        {% set var13="醒醒我们回家了" %}
-        {{ var }}
-        {% end %}
-    {{ var }}
-    {% end %}
-    *hello set*
-    {% set var15="keep calm and carry on" %}
-    {{ var }}
+    {% if foo=='cymoo' %}
+    cymoo
+    {% elif foo=='colleen' %}
+    colleen
+    {% elif foo=='wake-up' %}
+    wake-up
+    {% else %}
+    end
     {% end %}
     """
     frags = TOK_REGEX.split(raw)
-    # print(frags)
+    print(frags)
     # # raw = '<div>{{ my_var }}</div>'
     template = MiniTemplate(raw)
     # print(template.root.children)
@@ -460,5 +470,5 @@ if __name__ == '__main__':
     # vars = [{'name': Cici('cymoo')}, {'name': Cici('colleen')}]
     # html = template.render(my_var=['cymoo', 'colleen'], yr_var={'foo': {'bar': 'hi, judy!'}}, the_var=ego,
     #                        that_var=[1, 3, 5], whos_var={'a': Bar()})
-    html = template.render(var=var)
+    html = template.render(persons=persons, foo=foo)
     print(html)
