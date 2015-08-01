@@ -157,6 +157,13 @@ class _Set(_ScopableNode):
         return self.render_children(set_context)
 
 
+# a class that used to identify loop things; find a better place to put the class.
+class _Loop:
+    def __init__(self):
+        self.index, self.length = 0, 0
+        self.first, self.last = False, False
+
+
 class _For(_ScopableNode):
     def process_fragment(self, fragment):
         try:
@@ -168,12 +175,50 @@ class _For(_ScopableNode):
 
     def render(self, context):
         items = eval(self.raw_expr, context, {})
+        loop = _Loop()
+        loop.length = len(items)
+        main_branch, empty_branch = self.branches[0], self.branches[1]
 
         def render_item(item):
             inner_context = context.copy()
-            inner_context.update({self.loop_var: item})
+            inner_context.update({self.loop_var: item, 'loop': loop})
             return self.render_children(inner_context)
-        return ''.join(map(render_item, items))
+
+        self.children = main_branch
+        if not items:
+            if empty_branch:
+                return self.render_children(context, empty_branch)
+
+        loop_children = []
+
+        for i, it in enumerate(items):
+            loop.index = i + 1
+            loop.first = True if i == 0 else False
+            loop.last = True if i == loop.length-1 else False
+            loop_children.append(render_item(it))
+
+        return ''.join(loop_children)
+
+    def exit_scope(self):
+        self.branches = self.split_children()
+
+    def split_children(self):
+        if _Empty not in map(type, self.children):
+            return [self.children, []]
+
+        main_branch, empty_branch = [], []
+        current_branch = main_branch
+        for child in self.children:
+            if isinstance(child, _Empty):
+                current_branch = empty_branch
+                continue
+            current_branch.append(child)
+        return [main_branch, empty_branch]
+
+
+class _Empty(_Node):
+    def render(self, context):
+        pass
 
 
 class _If(_ScopableNode):
@@ -192,7 +237,7 @@ class _If(_ScopableNode):
     def split_children(self):
         """
         branches:
-        a list that stores expr-branch pairs: [[if-expr,if-branch],[elif-expr,elif-branch],...[else-branch,else-branch]]
+        a list that stores expr-branch pairs: [[if-expr,if-branch],[elif-expr,elif-branch],...[else-expr,else-branch]]
         """
         branches = []
         branch = []
@@ -236,42 +281,19 @@ class _Raw(_ScopableNode):
 class _Call(_Node):
     def process_fragment(self, fragment):
         try:
-            bits = WHITESPACE.split(fragment)
-            self.callable = bits[1]
-            self.args, self.kwargs = self._parse_params(bits[2:])
+            bits = WHITESPACE.split(fragment, 1)
+            self.func = bits[1]
         except (ValueError, IndexError):
             raise TemplateSyntaxError(fragment)
 
-    def _parse_params(self, params):
-        args, kwargs = [], {}
-        for param in params:
-            if '=' in param:
-                name, value = param.split('=')
-                kwargs[name] = eval_expression(value)
-            else:
-                args.append(eval_expression(param))
-        return args, kwargs
-
     def render(self, context):
-        resolved_args, resolved_kwargs = [], {}
-        for kind, value in self.args:
-            if kind == 'name':
-                value = resolve(value, context)
-            resolved_args.append(value)
-        for key, (kind, value) in self.kwargs.items():
-            if kind == 'name':
-                value = resolve(value, context)
-            resolved_kwargs[key] = value
-        resolved_callable = resolve(self.callable, context)
-        if hasattr(resolved_callable, '__call__'):
-            return resolved_callable(*resolved_args, **resolved_kwargs)
-        else:
-            raise TemplateError("'%s' is not a callable" % self.callable)
+        return eval(self.func, context, {})
 
 
 class Compiler:
     def __init__(self, template_string):
         self.template_string = template_string
+        # print(self.template_string)
 
     def each_fragment(self):
         for fragment in TOK_REGEX.split(self.template_string):
@@ -309,6 +331,8 @@ class Compiler:
             cmd = fragment.clean.split()[0]
             if cmd == 'for':
                 node_class = _For
+            elif cmd == 'empty':
+                node_class = _Empty
             elif cmd == 'if':
                 node_class = _If
             elif cmd == 'elif':
@@ -351,16 +375,28 @@ class MiniTemplate:
 
 if __name__ == '__main__':
 
-    var = 'testfool'
-    foo = 'caa'
+    var = 'test'
 
-    persons = ['cymoo', 'colleen']
+    def foo(a, b, bar=1):
+        return a + b + bar
+
+    persons = ['cymoo', 'colleen', 'ice']
     raw = r"""
-    {% set var = 14 %}
-    {% if var==14 %}
-    if
+    {% for index in persons %}
+    length:{{ loop.length }}
+    first:{{ loop.first }}
+    last:{{ loop.last }}
+    index:{{ loop.index }}
+    ***
+    {% if loop.first %}
+    i am the first
+    {% elif loop.last %}
+    i am the last
+    {% else %}
+    i am the middle
     {% end %}
     {% end %}
+
     """
     frags = TOK_REGEX.split(raw)
     print(frags)
