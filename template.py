@@ -22,7 +22,11 @@ TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
     COMMENT_TOKEN_END
 ))
 
-WHITESPACE = re.compile('\s+')
+WHITESPACE = re.compile(r'\s+')
+
+# FILTER_REGEX = re.compile(r'\|')
+
+# STRIP = re.compile(r'(?=\{%.*?%\}\s*)\n')
 
 
 class TemplateError(Exception):
@@ -43,6 +47,15 @@ class TemplateContextError(TemplateError):
 
     def __str__(self):
         return "cannot resolve '%s'" % self.context_var
+
+
+class TemplateFilterError(TemplateError):
+    def __init__(self, filter_func):
+        self.filter_func = filter_func
+
+    def __str__(self):
+        return "cannot apply filter '%s'; the filter does not exist or the parameters are not correct."\
+               % self.filter_func
 
 
 class TemplateSyntaxError(TemplateError):
@@ -124,17 +137,48 @@ class _Text(_Node):
 
 class _Variable(_Node):
     def process_fragment(self, fragment):
-        self.name = fragment
-        # self.filter_callbacks = []
+        bra_regex = re.compile(r'(\(.*\))')
+
+        bits = fragment.split('|')
+        self.var = bits[0].strip()
+        self.is_filtered = True if len(bits) > 1 else False
+
+        if self.is_filtered:
+            self.callbacks = []
+            funcs = map(do_trim, bits[1:])
+            for func in funcs:
+                args, kwargs = [], {}
+                re_list = bra_regex.split(func)
+                print('re-list', re_list)
+                has_param = True if len(re_list) > 1 else False
+                if has_param:
+                    params = re_list[1][1:-1]
+                    param_list = params.split(',')
+                    print('param-list', param_list)
+
+                    for it in param_list:
+                        if '=' in it:
+                            ls, rs = it.split('=')
+                            kwargs[ls.strip()] = rs.strip()
+                        else:
+                            args.append(it)
+
+                self.callbacks.append([re_list[0], args, kwargs])
 
     def render(self, context):
-        value = eval(self.name, context, {})
-        # filtered_value = value
-        # for callback in self.filter_callbacks:
-        #     filtered_value = callback(filtered_value, *args, **kw)
-        # return filtered_value
-
-        return value
+        raw_value = eval(self.var, context, {})
+        value = raw_value
+        if not self.is_filtered:
+            return value
+        else:
+            for it in self.callbacks:
+                callback_name, args, kwargs = it[0], it[1], it[2]
+                try:
+                    callback = FILTERS[callback_name]
+                    value = callback(value, *args, **kwargs)
+                except:
+                    raise TemplateFilterError(callback_name)
+            return value
 
 
 class _Comment(_Node):
@@ -145,8 +189,11 @@ class _Comment(_Node):
 class _Set(_ScopableNode):
 
     def process_fragment(self, fragment):
-        _, expr = WHITESPACE.split(fragment, 1)
-        self.var_name, self.value = expr.split('=')
+        try:
+            _, expr = WHITESPACE.split(fragment, 1)
+            self.var_name, self.value = expr.split('=')
+        except:
+            raise TemplateSyntaxError(fragment)
 
     def render(self, context):
         # ...
@@ -157,26 +204,22 @@ class _Set(_ScopableNode):
         return self.render_children(set_context)
 
 
-# a class that used to identify loop things; find a better place to put the class.
-class _Loop:
-    def __init__(self):
-        self.index, self.length = 0, 0
-        self.first, self.last = False, False
-
-
 class _For(_ScopableNode):
     def process_fragment(self, fragment):
         try:
             bits = WHITESPACE.split(fragment)
             self.loop_var = bits[1]
             self.raw_expr = bits[3]
-        except ValueError:
+        except:
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
         items = eval(self.raw_expr, context, {})
-        loop = _Loop()
-        loop.length = len(items)
+
+        # create an object(actually it's a class) for binding loop attributes
+        loop_attr = {'length': len(items), 'index': 0, 'first': False, 'last': False}
+        loop = type('_Loop', (), loop_attr)
+
         main_branch, empty_branch = self.branches[0], self.branches[1]
 
         def render_item(item):
@@ -194,7 +237,7 @@ class _For(_ScopableNode):
         for i, it in enumerate(items):
             loop.index = i + 1
             loop.first = True if i == 0 else False
-            loop.last = True if i == loop.length-1 else False
+            loop.last = True if i == loop.length - 1 else False
             loop_children.append(render_item(it))
 
         return ''.join(loop_children)
@@ -223,7 +266,10 @@ class _Empty(_Node):
 
 class _If(_ScopableNode):
     def process_fragment(self, fragment):
-        self.expr = fragment.split()[1]
+        try:
+            self.expr = fragment.split()[1]
+        except:
+            raise TemplateSyntaxError(fragment)
 
     def render(self, context):
         for branch in self.branches:
@@ -256,7 +302,10 @@ class _If(_ScopableNode):
 
 class _Elif(_Node):
     def process_fragment(self, fragment):
-        self.expr = fragment.split()[1]
+        try:
+            self.expr = fragment.split()[1]
+        except:
+            raise TemplateSyntaxError(fragment)
 
     def render(self, context):
         pass
@@ -362,10 +411,16 @@ class MiniTemplate:
 
     # The injected context will be replaced by the local context.
     @classmethod
-    def inject(cls, name, value):
+    def inject_context(cls, name, value):
         if not isinstance(name, str):
             raise Exception("<class 'str'> expected, but type of %s is %s." % (name, type(name)))
         cls.global_context[name] = value
+
+    @staticmethod
+    def add_filter(name, callback):
+        if not isinstance(name, str):
+            raise Exception("Filter-<%s> name should be a str." % str(callback))
+        FILTERS[name] = callback
 
     def render(self, **kwargs):
         merged_kwargs = self.global_context.copy()
@@ -373,33 +428,91 @@ class MiniTemplate:
         return self.root.render(merged_kwargs)
 
 
+# the following are the filters:
+def do_trim(s):
+    return s.strip()
+
+
+def do_capitalize(s):
+    return s.capitalize()
+
+
+def do_upper(s):
+    return s.upper()
+
+
+def do_lower(s):
+    return s.lower()
+
+
+def do_truncate(s, length=255, end='...'):
+    length = int(length)
+    if len(s) <= length:
+        return s
+
+    result = s[:length-len(end)].rsplit(' ', 1)[0]
+    if len(result) < length:
+        result += ''
+    return result + end
+
+
+def do_wordcount(s):
+    _word_re = re.compile(r'\w+(?u)')
+    return len(_word_re.split(s))
+
+
+FILTERS = {
+    'trim': do_trim,
+    'capitalize': do_capitalize,
+    'upper': do_upper,
+    'lower': do_lower,
+    'truncate': do_truncate,
+    'wordcount': do_wordcount
+}
+
 if __name__ == '__main__':
 
-    var = 'test'
+    cymoo = '醒醒我们回家了'
 
-    def foo(a, b, bar=1):
-        return a + b + bar
+    persons = ['cymoo', 'colleen', 'ice', 'milkyway']
+    # raw = r"""
+    # {% for index in persons %}
+    # length:{{ loop.length }}
+    # first:{{ loop.first }}
+    # last:{{ loop.last }}
+    # index:{{ loop.index }}
+    # ***
+    # {% if loop.first %}
+    # i am the first
+    # {% elif loop.last %}
+    # {% for i in ['a','b','c','d','d'] %}
+    # {{ loop.index }}
+    # {% end %}
+    # {% else %}
+    # i am the middle
+    # {% end %}
+    # {% end %}
+    # """
 
-    persons = ['cymoo', 'colleen', 'ice']
+    # STRIP = re.compile(r'(?=\{%.*?%\}\s*)\n')
+    # cy = STRIP.sub('', raw)
+    # print(cy)
+
+    # def strip(item):
+    #     if item.endswith('\n'):
+    #         return item.rstrip()
+    # print(cy)
+    # print(''.join(map(strip, cy)))
+
     raw = r"""
-    {% for index in persons %}
-    length:{{ loop.length }}
-    first:{{ loop.first }}
-    last:{{ loop.last }}
-    index:{{ loop.index }}
-    ***
-    {% if loop.first %}
-    i am the first
-    {% elif loop.last %}
-    i am the last
-    {% else %}
-    i am the middle
-    {% end %}
-    {% end %}
-
+    {{ cymoo | wordcount}}
     """
+    import time
+    t1 = time.time()
     frags = TOK_REGEX.split(raw)
     print(frags)
     template = MiniTemplate(raw)
-    html = template.render(persons=persons, foo=foo)
+    html = template.render(persons=persons, cymoo=cymoo)
+    t2 = time.time()
+    print(t2-t1)
     print(html)
