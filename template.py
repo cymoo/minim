@@ -13,6 +13,7 @@ COMMENT_TOKEN_END = '#}'
 BLOCK_TOKEN_START = '{%'
 BLOCK_TOKEN_END = '%}'
 
+
 TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
     VAR_TOKEN_START,
     VAR_TOKEN_END,
@@ -23,6 +24,7 @@ TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
 ))
 
 WHITESPACE = re.compile(r'\s+')
+NEWLINE = re.compile(r'^\s*\n')
 
 # FILTER_REGEX = re.compile(r'\|')
 
@@ -31,14 +33,6 @@ WHITESPACE = re.compile(r'\s+')
 
 class TemplateError(Exception):
     pass
-
-
-class TemplateNotFoundError(TemplateError):
-    def __init__(self, path):
-        self.path = path
-
-    def __str__(self):
-        return "cannot find template file: '%s'" % self.path
 
 
 class TemplateContextError(TemplateError):
@@ -108,6 +102,13 @@ class _Node:
     def exit_scope(self):
         pass
 
+    def remove_newline(self):
+        # if self.children:
+        #     child = self.children[0]
+        #     if isinstance(child, _Text):
+        #         child.text = NEWLINE.sub('', child.text)
+        raise NotImplementedError('sorry, i have not found an elegant way to remove newlines.')
+
     def render_children(self, context, children=None):
         if children is None:
             children = self.children
@@ -137,48 +138,61 @@ class _Text(_Node):
 
 class _Variable(_Node):
     def process_fragment(self, fragment):
-        bra_regex = re.compile(r'(\(.*\))')
-
         bits = fragment.split('|')
         self.var = bits[0].strip()
         self.is_filtered = True if len(bits) > 1 else False
+        self.resolve_filter(bits)
 
+    def resolve_filter(self, bits):
+        bracket_reg = re.compile(r'(\(.*\))')
         if self.is_filtered:
             self.callbacks = []
             funcs = map(do_trim, bits[1:])
             for func in funcs:
                 args, kwargs = [], {}
-                re_list = bra_regex.split(func)
-                print('re-list', re_list)
+                re_list = bracket_reg.split(func)
                 has_param = True if len(re_list) > 1 else False
                 if has_param:
                     params = re_list[1][1:-1]
-                    param_list = params.split(',')
-                    print('param-list', param_list)
-
-                    for it in param_list:
-                        if '=' in it:
-                            ls, rs = it.split('=')
-                            kwargs[ls.strip()] = rs.strip()
-                        else:
-                            args.append(it)
+                    if params:
+                        param_list = params.split(',')
+                        for it in param_list:
+                            if '=' in it:
+                                ls, rs = it.split('=')
+                                kwargs[ls.strip()] = rs.strip()
+                            else:
+                                args.append(it)
 
                 self.callbacks.append([re_list[0], args, kwargs])
 
     def render(self, context):
-        raw_value = eval(self.var, context, {})
-        value = raw_value
+        # The variable safe-flag is used to check whether the filter:safe exists in the filter list.
+        # Escape should always happen at the last second of rendering,
+        # because type of raw value does not necessarily be str.
+        safe_flag = []
+        try:
+            raw_value = eval(self.var, context, {})
+            value = raw_value
+        except:
+            raise TemplateContextError(self.var)
+
         if not self.is_filtered:
-            return value
+            return value if context.get('_escape_', '') == 'off' else html_escape(value)
         else:
             for it in self.callbacks:
                 callback_name, args, kwargs = it[0], it[1], it[2]
+                if callback_name == 'safe':
+                    safe_flag.append(1)
                 try:
                     callback = FILTERS[callback_name]
                     value = callback(value, *args, **kwargs)
                 except:
                     raise TemplateFilterError(callback_name)
-            return value
+
+            if safe_flag or context.get('_escape_', '') == 'off':
+                return value
+            else:
+                return html_escape(value)
 
 
 class _Comment(_Node):
@@ -186,21 +200,44 @@ class _Comment(_Node):
         return ''
 
 
+class _Escape(_ScopableNode):
+    def process_fragment(self, fragment):
+        try:
+            self.direc = fragment.split()[1]
+        except:
+            raise TemplateSyntaxError(fragment)
+        if self.direc not in ['on', 'off', 'ON', 'OFF']:
+            raise TemplateSyntaxError(fragment)
+
+    def render(self, context):
+        if self.direc in ['off', 'OFF']:
+            new_dict = {'_escape_': 'off'}
+            esc_context = context.copy()
+            esc_context.update(new_dict)
+            return self.render_children(esc_context)
+        return self.render_children(context)
+
+
 class _Set(_ScopableNode):
 
     def process_fragment(self, fragment):
         try:
+            and_reg = re.compile(r'\s*and\s*')
             _, expr = WHITESPACE.split(fragment, 1)
-            self.var_name, self.value = expr.split('=')
+            self.args = and_reg.split(expr)
         except:
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
-        # ...
-        eval_value = eval(self.value, context, {})
-        new_dict = eval('dict(%s=eval_value)' % self.var_name)
+        new_context = {}
+        for arg in self.args:
+            n, v = arg.split('=')
+            value = eval(v, context, {})
+            new_dict = eval('dict(%s=value,)' % n, {'value': value}, {})
+            new_context.update(new_dict)
+
         set_context = context.copy()
-        set_context.update(new_dict)
+        set_context.update(new_context)
         return self.render_children(set_context)
 
 
@@ -228,9 +265,8 @@ class _For(_ScopableNode):
             return self.render_children(inner_context)
 
         self.children = main_branch
-        if not items:
-            if empty_branch:
-                return self.render_children(context, empty_branch)
+        if not items and empty_branch:
+            return self.render_children(context, empty_branch)
 
         loop_children = []
 
@@ -278,6 +314,7 @@ class _If(_ScopableNode):
                 return self.render_children(context, branch[1])
 
     def exit_scope(self):
+        # self.remove_newline()
         self.branches = self.split_children()
 
     def split_children(self):
@@ -344,6 +381,19 @@ class Compiler:
         self.template_string = template_string
         # print(self.template_string)
 
+    def pre_compile(self, template_string):
+        """
+        . search tag {% extends 'bar.html' %}, the tag must appear before any texts.
+        . read file: bar.html and insert the contents to the tag's position.
+        . search {% block name %}lorem...{% endblock %}...in the <bar.html> contents.
+        . save the [name, lorem] pairs in a dict.
+        . search {% block name %}ipsum...{% endblock %}...in the following contents.
+        . save the [name, ipsum] pairs in a dict.
+        . search tag {% include 'foo.html' %}.
+        . read file: foo.html and insert the contents to the tag's position.
+        """
+        return ''
+
     def each_fragment(self):
         for fragment in TOK_REGEX.split(self.template_string):
             if fragment:
@@ -368,7 +418,8 @@ class Compiler:
                     new_node.enter_scope()
         return root
 
-    def create_node(self, fragment):
+    @staticmethod
+    def create_node(fragment):
         node_class = None
         if fragment.type == TEXT_FRAGMENT:
             node_class = _Text
@@ -394,6 +445,8 @@ class Compiler:
                 node_class = _Set
             elif cmd == 'raw':
                 node_class = _Raw
+            elif cmd == 'escape':
+                node_class = _Escape
             else:
                 pass
         if node_class is None:
@@ -407,7 +460,6 @@ class MiniTemplate:
     def __init__(self, contents=None):
         self.contents = contents
         self.root = Compiler(contents).compile()
-        # print(self.root.children)
 
     # The injected context will be replaced by the local context.
     @classmethod
@@ -428,21 +480,34 @@ class MiniTemplate:
         return self.root.render(merged_kwargs)
 
 
+# **************
+def html_escape(s):
+    """ Escape HTML special characters ``&<>`` and quotes ``'"``. """
+    return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')\
+        .replace('"', '&quot;').replace("'", '&#039;')
+
+
 # the following are the filters:
+
+def do_unescape(s):
+    return str(s).replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')\
+        .replace('&quot;', '"').replace('&#039;', "'")
+
+
 def do_trim(s):
-    return s.strip()
+    return str(s).strip()
 
 
 def do_capitalize(s):
-    return s.capitalize()
+    return str(s).capitalize()
 
 
 def do_upper(s):
-    return s.upper()
+    return str(s).upper()
 
 
 def do_lower(s):
-    return s.lower()
+    return str(s).lower()
 
 
 def do_truncate(s, length=255, end='...'):
@@ -462,6 +527,7 @@ def do_wordcount(s):
 
 
 FILTERS = {
+    'safe': do_unescape,
     'trim': do_trim,
     'capitalize': do_capitalize,
     'upper': do_upper,
@@ -472,40 +538,17 @@ FILTERS = {
 
 if __name__ == '__main__':
 
-    cymoo = '醒醒我们回家了'
+    cymoo = 'wake up, let us go home'
 
-    persons = ['cymoo', 'colleen', 'ice', 'milkyway']
-    # raw = r"""
-    # {% for index in persons %}
-    # length:{{ loop.length }}
-    # first:{{ loop.first }}
-    # last:{{ loop.last }}
-    # index:{{ loop.index }}
-    # ***
-    # {% if loop.first %}
-    # i am the first
-    # {% elif loop.last %}
-    # {% for i in ['a','b','c','d','d'] %}
-    # {{ loop.index }}
-    # {% end %}
-    # {% else %}
-    # i am the middle
-    # {% end %}
-    # {% end %}
-    # """
-
-    # STRIP = re.compile(r'(?=\{%.*?%\}\s*)\n')
-    # cy = STRIP.sub('', raw)
-    # print(cy)
-
-    # def strip(item):
-    #     if item.endswith('\n'):
-    #         return item.rstrip()
-    # print(cy)
-    # print(''.join(map(strip, cy)))
+    persons = ['<cymoo>', 'colleen', 'ice', 'milkyway']
 
     raw = r"""
-    {{ cymoo | wordcount}}
+    {% escape off %}
+    {% for ego in persons %}
+    {{ ego }}
+    {% end %}
+    {% end %}
+    {{ persons | safe }}
     """
     import time
     t1 = time.time()
@@ -514,5 +557,5 @@ if __name__ == '__main__':
     template = MiniTemplate(raw)
     html = template.render(persons=persons, cymoo=cymoo)
     t2 = time.time()
-    print(t2-t1)
     print(html)
+    print(t2-t1)

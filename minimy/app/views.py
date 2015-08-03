@@ -11,7 +11,8 @@ def favicon():
 
 @app.get('/')
 def index():
-    sad = ['苒苒物华休', '杳杳故音绝']
-    return render('index.html', sad=sad)
+    motto = ['醒醒我们回家了', '世界是我的表象', '向死而生', '凡人所有的我都有']
+    name = 'cymoo'
+    return render('index.html', motto=motto, name=name)
 
 app.run()

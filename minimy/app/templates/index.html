@@ -8,10 +8,20 @@
 <h1 style="margin-top: 30px; text-align: center;">醒醒我们回家了</h1>
 <section>
     <ul>
-        {% foreach sad %}
-        <li>{{ item }}</li>
+        {% for i in motto %}
+        <li>{{ i }}</li>
+        {% if loop.first %}
+        this is the first loop.
+        {% set var='世界是我的表象' %}
+        {{ var }}
+        {% end %}
+        {% end %}
+        {% empty %}
+        no contents in the list
         {% end %}
     </ul>
+    <hr/>
+    {{ 111*111 }}
 </section>
 </body>
 </html>
