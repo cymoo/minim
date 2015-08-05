@@ -1,4 +1,7 @@
 import re
+import math
+import os
+import ast
 
 VAR_FRAGMENT = 0
 OPEN_BLOCK_FRAGMENT = 1
@@ -87,6 +90,7 @@ class _Node:
     creates_scope = False
 
     def __init__(self, fragment=None):
+        self.frag = fragment
         self.children = []
         self.process_fragment(fragment)
 
@@ -107,7 +111,7 @@ class _Node:
         #     child = self.children[0]
         #     if isinstance(child, _Text):
         #         child.text = NEWLINE.sub('', child.text)
-        raise NotImplementedError('sorry, i have not found an elegant way to remove newlines.')
+        raise NotImplementedError('sorry, yet to find an elegant way to remove newlines.')
 
     def render_children(self, context, children=None):
         if children is None:
@@ -116,16 +120,52 @@ class _Node:
         def render_child(child):
             child_html = child.render(context)
             return '' if not child_html else str(child_html)
+
         return ''.join(map(render_child, children))
 
 
 class _ScopableNode(_Node):
     creates_scope = True
 
+    def save_end(self, frag):
+        self.end_node = frag
+
 
 class _Root(_Node):
     def render(self, context):
         return self.render_children(context)
+
+
+class _Extends(_Node):
+    def process_fragment(self, fragment):
+        pass
+
+    def render(self, context):
+        pass
+
+
+class _Block(_ScopableNode):
+    def process_fragment(self, fragment):
+        self.block_name = fragment.split()[1]
+
+    def render(self, context):
+        if self.end_node.clean != 'endblock':
+            raise TemplateError('"%s" was found, but "endblock" is missing.' % self.frag)
+        pass
+
+
+class _Include(_Node):
+    def process_fragment(self, fragment):
+        # filename = fragment.split()[1]
+        # self.filepath = os.path.join(os.getcwd(), filename)
+        self.filepath = '/path/to/file'
+
+    def render(self, context):
+        with open(self.filepath) as f:
+            contents = f.read()
+            tpl = MiniTemplate(contents)
+
+        return tpl.root.render(context)
 
 
 class _Text(_Node):
@@ -138,32 +178,33 @@ class _Text(_Node):
 
 class _Variable(_Node):
     def process_fragment(self, fragment):
+        self.has_filter = False
         bits = fragment.split('|')
         self.var = bits[0].strip()
-        self.is_filtered = True if len(bits) > 1 else False
-        self.resolve_filter(bits)
+        if len(bits) > 1:
+            self.has_filter = True
+            self.resolve_filter(bits)
 
     def resolve_filter(self, bits):
         bracket_reg = re.compile(r'(\(.*\))')
-        if self.is_filtered:
-            self.callbacks = []
-            funcs = map(do_trim, bits[1:])
-            for func in funcs:
-                args, kwargs = [], {}
-                re_list = bracket_reg.split(func)
-                has_param = True if len(re_list) > 1 else False
-                if has_param:
-                    params = re_list[1][1:-1]
-                    if params:
-                        param_list = params.split(',')
-                        for it in param_list:
-                            if '=' in it:
-                                ls, rs = it.split('=')
-                                kwargs[ls.strip()] = rs.strip()
-                            else:
-                                args.append(it)
+        self.callbacks = []
+        funcs = map(do_trim, bits[1:])
+        for func in funcs:
+            args, kwargs = [], {}
+            re_list = bracket_reg.split(func)
+            has_param = True if len(re_list) > 1 else False
+            if has_param:
+                params = re_list[1][1:-1]
+                if params:
+                    param_list = params.split(',')
+                    for it in param_list:
+                        if '=' in it:
+                            ls, rs = it.split('=')
+                            kwargs[ls.strip()] = literal_eval(rs.strip())
+                        else:
+                            args.append(literal_eval(it))
 
-                self.callbacks.append([re_list[0], args, kwargs])
+            self.callbacks.append([re_list[0], args, kwargs])
 
     def render(self, context):
         # The variable safe-flag is used to check whether the filter:safe exists in the filter list.
@@ -174,10 +215,10 @@ class _Variable(_Node):
             raw_value = eval(self.var, context, {})
             value = raw_value
         except:
-            raise TemplateContextError(self.var)
+            value = None
 
-        if not self.is_filtered:
-            return value if context.get('_escape_', '') == 'off' else html_escape(value)
+        if not self.has_filter:
+            return value if context.get('~>_<~', '') == 'off' else html_escape(value)
         else:
             for it in self.callbacks:
                 callback_name, args, kwargs = it[0], it[1], it[2]
@@ -189,7 +230,7 @@ class _Variable(_Node):
                 except:
                     raise TemplateFilterError(callback_name)
 
-            if safe_flag or context.get('_escape_', '') == 'off':
+            if safe_flag or context.get('~>_<~', '') == 'off':
                 return value
             else:
                 return html_escape(value)
@@ -210,8 +251,11 @@ class _Escape(_ScopableNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
+        if self.end_node.clean != 'endescape':
+            raise TemplateError('"%s" was found, but "endescape" is missing.' % self.frag)
+
         if self.direc in ['off', 'OFF']:
-            new_dict = {'_escape_': 'off'}
+            new_dict = {'~>_<~': 'off'}
             esc_context = context.copy()
             esc_context.update(new_dict)
             return self.render_children(esc_context)
@@ -229,6 +273,9 @@ class _Set(_ScopableNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
+        if self.end_node.clean != 'endset':
+            raise TemplateError('"%s" was found, but "endset" is missing.' % self.frag)
+
         new_context = {}
         for arg in self.args:
             n, v = arg.split('=')
@@ -243,17 +290,20 @@ class _Set(_ScopableNode):
 
 class _For(_ScopableNode):
     def process_fragment(self, fragment):
+
+        bits = WHITESPACE.split(fragment)
         try:
-            bits = WHITESPACE.split(fragment)
             self.loop_var = bits[1]
             self.raw_expr = bits[3]
         except:
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
+        if self.end_node.clean != 'endfor':
+            raise TemplateError('"%s" was found, but "endfor" is missing.' % self.frag)
+
         items = eval(self.raw_expr, context, {})
 
-        # create an object(actually it's a class) for binding loop attributes
         loop_attr = {'length': len(items), 'index': 0, 'first': False, 'last': False}
         loop = type('_Loop', (), loop_attr)
 
@@ -308,13 +358,15 @@ class _If(_ScopableNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
+        if self.end_node.clean != 'endif':
+            raise TemplateError('"%s" was found, but "endif" is missing.' % self.frag)
+
         for branch in self.branches:
             con_bit = eval(branch[0], context, {})
             if con_bit:
                 return self.render_children(context, branch[1])
 
     def exit_scope(self):
-        # self.remove_newline()
         self.branches = self.split_children()
 
     def split_children(self):
@@ -361,7 +413,9 @@ class _Raw(_ScopableNode):
         pass
 
     def render(self, context):
-        print(self.children)
+        if self.end_node.clean != 'endraw':
+            raise TemplateError('"%s" was found, but "endraw" is missing.' % self.frag)
+        return ''.join(self.children)
 
 
 class _Call(_Node):
@@ -379,20 +433,9 @@ class _Call(_Node):
 class Compiler:
     def __init__(self, template_string):
         self.template_string = template_string
-        # print(self.template_string)
 
     def pre_compile(self, template_string):
-        """
-        . search tag {% extends 'bar.html' %}, the tag must appear before any texts.
-        . read file: bar.html and insert the contents to the tag's position.
-        . search {% block name %}lorem...{% endblock %}...in the <bar.html> contents.
-        . save the [name, lorem] pairs in a dict.
-        . search {% block name %}ipsum...{% endblock %}...in the following contents.
-        . save the [name, ipsum] pairs in a dict.
-        . search tag {% include 'foo.html' %}.
-        . read file: foo.html and insert the contents to the tag's position.
-        """
-        return ''
+        raise NotImplementedError('please wait~')
 
     def each_fragment(self):
         for fragment in TOK_REGEX.split(self.template_string):
@@ -407,12 +450,23 @@ class Compiler:
                 raise TemplateError('nesting issues')
             parent_scope = scope_stack[-1]
             if fragment.type == CLOSE_BLOCK_FRAGMENT:
-                parent_scope.exit_scope()
-                scope_stack.pop()
-                continue
+                if isinstance(parent_scope, _Raw) and fragment.clean != 'endraw':
+                    parent_scope.children.append(fragment.raw)
+                    continue
+                else:
+                    parent_scope.save_end(fragment)
+                    parent_scope.exit_scope()
+                    scope_stack.pop()
+                    continue
+
             new_node = self.create_node(fragment)
             if new_node:
-                parent_scope.children.append(new_node)
+                if isinstance(parent_scope, _Raw):
+                    parent_scope.children.append(fragment.raw)
+                    continue
+                else:
+                    parent_scope.children.append(new_node)
+
                 if new_node.creates_scope:
                     scope_stack.append(new_node)
                     new_node.enter_scope()
@@ -429,7 +483,13 @@ class Compiler:
             node_class = _Comment
         elif fragment.type == OPEN_BLOCK_FRAGMENT:
             cmd = fragment.clean.split()[0]
-            if cmd == 'for':
+            if cmd == 'extends':
+                node_class = _Extends
+            elif cmd == 'block':
+                node_class = _Block
+            elif cmd == 'include':
+                node_class = _Include
+            elif cmd == 'for':
                 node_class = _For
             elif cmd == 'empty':
                 node_class = _Empty
@@ -480,15 +540,25 @@ class MiniTemplate:
         return self.root.render(merged_kwargs)
 
 
-# **************
+# utils
 def html_escape(s):
     """ Escape HTML special characters ``&<>`` and quotes ``'"``. """
     return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')\
         .replace('"', '&quot;').replace("'", '&#039;')
 
 
-# the following are the filters:
+def literal_eval(expr):
+    try:
+        return ast.literal_eval(expr)
+    except ValueError:
+        return expr
 
+
+################################
+# the following are the filters:
+################################
+
+### strings ###
 def do_unescape(s):
     return str(s).replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')\
         .replace('&quot;', '"').replace('&#039;', "'")
@@ -511,7 +581,6 @@ def do_lower(s):
 
 
 def do_truncate(s, length=255, end='...'):
-    length = int(length)
     if len(s) <= length:
         return s
 
@@ -526,6 +595,60 @@ def do_wordcount(s):
     return len(_word_re.split(s))
 
 
+### lists ###
+def select_first(value):
+    try:
+        return value[0]
+    except IndexError:
+        return ''
+
+
+def select_last(value):
+    try:
+        return value[-1]
+    except IndexError:
+        return ''
+
+
+def get_length(value):
+    try:
+        return len(value)
+    except (ValueError, TypeError):
+        return 0
+
+
+### integers ###
+def do_round(value, precision=0, method='common'):
+    if not method in ('common', 'ceil', 'floor'):
+        raise Exception('error in round(filter) argument, method must be common, cel or floor.')
+    if method == 'common':
+        return round(value, precision)
+    func = getattr(math, method)
+    return func(value * (10 ** precision)) / (10 ** precision)
+
+
+### dates ###
+def format_date(value, arg=None):
+    pass
+
+
+def format_time(value, arg=None):
+    pass
+
+
+def time_since(value, arg=None):
+    pass
+
+
+def time_until(value, arg=None):
+    pass
+
+
+### logic ###
+def set_default(value, arg):
+    return value or arg
+
+
 FILTERS = {
     'safe': do_unescape,
     'trim': do_trim,
@@ -533,29 +656,46 @@ FILTERS = {
     'upper': do_upper,
     'lower': do_lower,
     'truncate': do_truncate,
-    'wordcount': do_wordcount
+    'wordcount': do_wordcount,
+    'round': do_round,
+    'first': select_first,
+    'last': select_last,
+    'length': get_length,
+    'date': format_date,
+    'time': format_time,
+    'timesince': time_since,
+    'timeuntil': time_until,
+    'default': set_default
 }
 
 if __name__ == '__main__':
 
     cymoo = 'wake up, let us go home'
+    num = 13.2436
+    motto = '醒醒我们回家了'
+    var = '1024*1024'
 
     persons = ['<cymoo>', 'colleen', 'ice', 'milkyway']
 
     raw = r"""
-    {% escape off %}
-    {% for ego in persons %}
-    {{ ego }}
-    {% end %}
-    {% end %}
-    {{ persons | safe }}
+    {% set colleen='world is my idea' %}
+    {% raw %}
+    {% for item in persons %}
+    {{ item }}
+    {% endfor %}
+    {{ colleen }}
+    {% endraw %}
+    {% for item in persons%}
+    {{ item  }}
+    {% endfor%}
+    {{ colleen }}
+    {% endset %}
     """
     import time
     t1 = time.time()
     frags = TOK_REGEX.split(raw)
-    print(frags)
     template = MiniTemplate(raw)
-    html = template.render(persons=persons, cymoo=cymoo)
+    html = template.render(persons=persons, cymoo=cymoo, num=num, motto=motto, var=var)
     t2 = time.time()
     print(html)
     print(t2-t1)
