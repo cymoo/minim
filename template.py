@@ -1,7 +1,7 @@
 import re
 import math
-import os
 import ast
+from random import choice
 
 VAR_FRAGMENT = 0
 OPEN_BLOCK_FRAGMENT = 1
@@ -15,6 +15,8 @@ COMMENT_TOKEN_START = '{#'
 COMMENT_TOKEN_END = '#}'
 BLOCK_TOKEN_START = '{%'
 BLOCK_TOKEN_END = '%}'
+
+RAW_NODE_END = 'endraw'
 
 
 TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
@@ -89,7 +91,8 @@ class _Fragment:
 class _Node:
     creates_scope = False
 
-    def __init__(self, fragment=None):
+    def __init__(self, ins, fragment=None):
+        self.ins = ins
         self.frag = fragment
         self.children = []
         self.process_fragment(fragment)
@@ -124,7 +127,7 @@ class _Node:
         return ''.join(map(render_child, children))
 
 
-class _ScopableNode(_Node):
+class _ScopeNode(_Node):
     creates_scope = True
 
     def save_end(self, frag):
@@ -133,25 +136,75 @@ class _ScopableNode(_Node):
 
 class _Root(_Node):
     def render(self, context):
-        return self.render_children(context)
+        children = self.children
+
+        if isinstance(children[0], _Extends):
+            _extends = children.pop(0)
+            self.ins.block_dicts.append({})
+            self.ins.has_ancestor = True
+        elif isinstance(children[0], _Text) and isinstance(children[1], _Extends):
+            _extends = children.pop(1)
+            self.ins.block_dicts.append({})
+            self.ins.has_ancestor = True
+        else:
+            _extends = None
+            self.ins.has_ancestor = False
+
+        if self.ins.has_ancestor:
+            for child in self.children:
+                if isinstance(child, _Block):
+                    child.render(context)
+            return _extends.render(context)
+        else:
+            return self.render_children(context)
 
 
+#test
 class _Extends(_Node):
     def process_fragment(self, fragment):
-        pass
+        filename = fragment.split()[1]
 
     def render(self, context):
-        pass
+
+        string = r"""
+        <html>
+        <head><title>wake up</title></head>
+        <body>
+            <header>This is the header.</header>
+            {% block css %}css files{% endblock %}
+            {% block content %}lorem{% endblock %}
+            {% block script %}script files{% endblock %}
+            <footer>This is the footer.{% block sub-content %}sub-lorem{% endblock %}</footer>
+        </body>
+        </html>
+        """
+
+        compiler = self.ins.compiler
+        compiler.add_content(string)
+        root = compiler.compile()
+        return root.render(context)
 
 
-class _Block(_ScopableNode):
+#test
+class _Block(_ScopeNode):
     def process_fragment(self, fragment):
         self.block_name = fragment.split()[1]
 
     def render(self, context):
         if self.end_node.clean != 'endblock':
-            raise TemplateError('"%s" was found, but "endblock" is missing.' % self.frag)
-        pass
+            raise TemplateError('"To match "%s", "endblock" is expected, but "%s" was found.' %
+                                (self.frag, self.end_node.clean))
+
+        if self.ins.has_ancestor:
+            result = self.render_children(context)
+            self.ins.block_dicts[-1].update({self.block_name: result})
+            return result
+        else:
+            for bd in reversed(self.ins.block_dicts):
+                result = bd.get(self.block_name, '')
+                if result:
+                    return result
+            return self.render_children(context)
 
 
 class _Include(_Node):
@@ -161,11 +214,12 @@ class _Include(_Node):
         self.filepath = '/path/to/file'
 
     def render(self, context):
-        with open(self.filepath) as f:
-            contents = f.read()
-            tpl = MiniTemplate(contents)
-
-        return tpl.root.render(context)
+        # with open(self.filepath) as f:
+        #     contents = f.read()
+        #     tpl = MiniTemplate(contents)
+        #
+        # return tpl.root.render(context)
+        pass
 
 
 class _Text(_Node):
@@ -241,7 +295,7 @@ class _Comment(_Node):
         return ''
 
 
-class _Escape(_ScopableNode):
+class _Escape(_ScopeNode):
     def process_fragment(self, fragment):
         try:
             self.direc = fragment.split()[1]
@@ -262,7 +316,7 @@ class _Escape(_ScopableNode):
         return self.render_children(context)
 
 
-class _Set(_ScopableNode):
+class _Set(_ScopeNode):
 
     def process_fragment(self, fragment):
         try:
@@ -288,7 +342,7 @@ class _Set(_ScopableNode):
         return self.render_children(set_context)
 
 
-class _For(_ScopableNode):
+class _For(_ScopeNode):
     def process_fragment(self, fragment):
 
         bits = WHITESPACE.split(fragment)
@@ -350,7 +404,7 @@ class _Empty(_Node):
         pass
 
 
-class _If(_ScopableNode):
+class _If(_ScopeNode):
     def process_fragment(self, fragment):
         try:
             self.expr = fragment.split()[1]
@@ -408,7 +462,7 @@ class _Else(_Node):
         pass
 
 
-class _Raw(_ScopableNode):
+class _Raw(_ScopeNode):
     def process_fragment(self, fragment):
         pass
 
@@ -431,11 +485,11 @@ class _Call(_Node):
 
 
 class Compiler:
-    def __init__(self, template_string):
-        self.template_string = template_string
+    def __init__(self, ins):
+        self.ins = ins
 
-    def pre_compile(self, template_string):
-        raise NotImplementedError('please wait~')
+    def add_content(self, template_string):
+        self.template_string = template_string
 
     def each_fragment(self):
         for fragment in TOK_REGEX.split(self.template_string):
@@ -443,14 +497,14 @@ class Compiler:
                 yield _Fragment(fragment)
 
     def compile(self):
-        root = _Root()
+        root = _Root(self.ins)
         scope_stack = [root]
         for fragment in self.each_fragment():
             if not scope_stack:
                 raise TemplateError('nesting issues')
             parent_scope = scope_stack[-1]
             if fragment.type == CLOSE_BLOCK_FRAGMENT:
-                if isinstance(parent_scope, _Raw) and fragment.clean != 'endraw':
+                if isinstance(parent_scope, _Raw) and fragment.clean != RAW_NODE_END:
                     parent_scope.children.append(fragment.raw)
                     continue
                 else:
@@ -472,8 +526,7 @@ class Compiler:
                     new_node.enter_scope()
         return root
 
-    @staticmethod
-    def create_node(fragment):
+    def create_node(self, fragment):
         node_class = None
         if fragment.type == TEXT_FRAGMENT:
             node_class = _Text
@@ -511,33 +564,46 @@ class Compiler:
                 pass
         if node_class is None:
             raise TemplateSyntaxError(fragment)
-        return node_class(fragment.clean)
+        return node_class(self.ins, fragment.clean)
 
 
 class MiniTemplate:
     global_context = {}
 
     def __init__(self, contents=None):
-        self.contents = contents
-        self.root = Compiler(contents).compile()
+        self.has_ancestor = False
+        self.block_dicts = []
+        # self.ancestor_stack = []
+        self.compiler = Compiler(self)
+        self.compiler.add_content(contents)
+        self.root = self.compiler.compile()
 
-    # The injected context will be replaced by the local context.
     @classmethod
     def inject_context(cls, name, value):
+        """
+        Inject the global context to the template, and the context will be shared by all instances.
+        The variables which have the same name with ones in the local context will be substituted.
+        """
         if not isinstance(name, str):
             raise Exception("<class 'str'> expected, but type of %s is %s." % (name, type(name)))
         cls.global_context[name] = value
 
     @staticmethod
     def add_filter(name, callback):
+        """
+        Add a filter to the template; a filter is used to alter the original value.
+        Filter function should not do complex logic.
+        """
         if not isinstance(name, str):
             raise Exception("Filter-<%s> name should be a str." % str(callback))
         FILTERS[name] = callback
 
     def render(self, **kwargs):
-        merged_kwargs = self.global_context.copy()
-        merged_kwargs.update(kwargs)
-        return self.root.render(merged_kwargs)
+        self.merged_kwargs = self.global_context.copy()
+        self.merged_kwargs.update(kwargs)
+        result = self.root.render(self.merged_kwargs)
+        print('block-dicts', self.block_dicts)
+        return result
 
 
 # utils
@@ -548,6 +614,11 @@ def html_escape(s):
 
 
 def literal_eval(expr):
+    """
+    ast.literal_eval is used to safely evaluate a string and return a basic type value:
+    str, int, float, True/False, None, dict, list, tuple.
+    Always use literal_eval instead of eval when possible.
+    """
     try:
         return ast.literal_eval(expr)
     except ValueError:
@@ -560,27 +631,38 @@ def literal_eval(expr):
 
 ### strings ###
 def do_unescape(s):
+    """Unescape HTML special characters."""
     return str(s).replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')\
         .replace('&quot;', '"').replace('&#039;', "'")
 
 
 def do_trim(s):
+    """Strip leading and trailing whitespace."""
     return str(s).strip()
 
 
 def do_capitalize(s):
+    """Capitalize a value. The first character will be uppercase, all others lowercase."""
     return str(s).capitalize()
 
 
 def do_upper(s):
+    """Convert a value to uppercase."""
     return str(s).upper()
 
 
 def do_lower(s):
+    """Convert a value to lowercase."""
     return str(s).lower()
 
 
 def do_truncate(s, length=255, end='...'):
+    """
+    Return a truncated copy of the string. The length is specified with the first
+    parameter which defaults to 255. If the text was in fact truncated it will append
+    an ellipsis sign "...". If you want a different ellipsis sign than "..." you can
+    specify it using the last parameter.
+    """
     if len(s) <= length:
         return s
 
@@ -591,40 +673,81 @@ def do_truncate(s, length=255, end='...'):
 
 
 def do_wordcount(s):
+    """Count the words in that string. """
     _word_re = re.compile(r'\w+(?u)')
     return len(_word_re.split(s))
 
 
 ### lists ###
-def select_first(value):
+def select_first(seq):
+    """Return the first item of a sequence."""
     try:
-        return value[0]
+        return next(iter(seq))
+    except StopIteration:
+        return 'No first item, sequence was empty.'
+
+
+def select_last(seq):
+    """Return the last item of a sequence."""
+    try:
+        return next(iter(reversed(seq)))
+    except StopIteration:
+        return 'No first item, sequence was empty.'
+
+
+def select_random(seq):
+    """Return a random item from that sequence."""
+    try:
+        return choice(seq)
     except IndexError:
-        return ''
+        return 'No random item, sequence was empty.'
 
 
-def select_last(value):
+def get_length(seq):
+    """Return the length of a sequence."""
     try:
-        return value[-1]
-    except IndexError:
-        return ''
-
-
-def get_length(value):
-    try:
-        return len(value)
+        return len(seq)
     except (ValueError, TypeError):
         return 0
 
 
-### integers ###
+### numbers ###
 def do_round(value, precision=0, method='common'):
+    """
+    Round the number to a given precision. The first parameter specifies the precision,
+    the second the rounding method.
+    """
     if not method in ('common', 'ceil', 'floor'):
         raise Exception('error in round(filter) argument, method must be common, cel or floor.')
     if method == 'common':
         return round(value, precision)
     func = getattr(math, method)
     return func(value * (10 ** precision)) / (10 ** precision)
+
+
+def do_int(value, default=0):
+    """
+    Convert the value into an integer. If the conversion doesn't work it will return 0.
+    You can override the default using the first parameter.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+
+def do_float(value, default=0.0):
+    """
+    Convert the value into an float. If the conversion doesn't work it will return 0.0.
+    You can override the default using the first parameter.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 ### dates ###
@@ -646,6 +769,7 @@ def time_until(value, arg=None):
 
 ### logic ###
 def set_default(value, arg):
+    """If the value is undefined, it will return the passed default value."""
     return value or arg
 
 
@@ -658,8 +782,11 @@ FILTERS = {
     'truncate': do_truncate,
     'wordcount': do_wordcount,
     'round': do_round,
+    'int': do_int,
+    'float': do_float,
     'first': select_first,
     'last': select_last,
+    'random': select_random,
     'length': get_length,
     'date': format_date,
     'time': format_time,
@@ -678,24 +805,12 @@ if __name__ == '__main__':
     persons = ['<cymoo>', 'colleen', 'ice', 'milkyway']
 
     raw = r"""
-    {% set colleen='world is my idea' %}
-    {% raw %}
-    {% for item in persons %}
-    {{ item }}
-    {% endfor %}
-    {{ colleen }}
-    {% endraw %}
-    {% for item in persons%}
-    {{ item  }}
-    {% endfor%}
-    {{ colleen }}
-    {% endset %}
+    {% extends test %}
+    {% block content %}{{ motto }}{% endblock %}
+    {% block sub-content %}{{ cymoo }}{% endblock %}
     """
-    import time
-    t1 = time.time()
+
     frags = TOK_REGEX.split(raw)
     template = MiniTemplate(raw)
     html = template.render(persons=persons, cymoo=cymoo, num=num, motto=motto, var=var)
-    t2 = time.time()
     print(html)
-    print(t2-t1)
