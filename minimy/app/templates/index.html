@@ -5,23 +5,11 @@
     <title>Hello Minim</title>
 </head>
 <body>
-<h1 style="margin-top: 30px; text-align: center;">醒醒我们回家了</h1>
+<h1 style="margin-top: 30px; text-align: center;">{{ motto }}</h1>
 <section>
     <ul>
-        {% for i in motto %}
-        <li>{{ i }}</li>
-        {% if loop.first %}
-        this is the first loop.
-        {% set var='世界是我的表象' %}
-        {{ var }}
-        {% end %}
-        {% end %}
-        {% empty %}
-        no contents in the list
-        {% end %}
+
     </ul>
-    <hr/>
-    {% include base.html %}
 </section>
 </body>
 </html>

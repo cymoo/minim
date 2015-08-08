@@ -1,6 +1,7 @@
 import re
 import math
 import ast
+import os
 from random import choice
 
 VAR_FRAGMENT = 0
@@ -66,17 +67,26 @@ class TemplateSyntaxError(TemplateError):
 
 
 class _Fragment:
+    """
+    A class stores raw fragments and clean them. It has a method to
+    determine type of fragment.
+    """
     def __init__(self, raw_text):
         self.raw = raw_text
         self.clean = self.clean_fragment()
 
     def clean_fragment(self):
+        """
+        Strip the tokens "{{ }} {% %} {# #} and the leading & trailing
+        whitespaces from the raw fragment
+        """
         if self.raw[:2] in (VAR_TOKEN_START, BLOCK_TOKEN_START):
             return self.raw.strip()[2:-2].strip()
         return self.raw
 
     @property
     def type(self):
+        """Determine the type of fragment."""
         raw_start = self.raw[:2]
         if raw_start == VAR_TOKEN_START:
             return VAR_FRAGMENT
@@ -89,34 +99,59 @@ class _Fragment:
 
 
 class _Node:
+    """
+    _Node class is used to serve as the base class for tree nodes, and then
+    create concrete subclasses for each possible node type. A subclass should
+    provide implementations for process_fragment() and render() and could
+    optionally implement enter_scope() and exit_scope().
+    """
     creates_scope = False
 
     def __init__(self, ins, fragment=None):
+        """
+        During initialization an instance of MiniTemplate class is passed to the
+        object. The instance is used for storing and sharing some attributes
+        between all node objects. It is especially useful in template inheritance.
+        """
         self.ins = ins
         self.frag = fragment
         self.children = []
         self.process_fragment(fragment)
 
     def process_fragment(self, fragment):
+        """
+        The method is used to further parse the fragment contents and
+        store necessary attributes on the Node object.
+        """
         pass
 
     def enter_scope(self):
+        """
+        A hoop which gets called by the compiler during compilation
+        and performs initialization. It is called when the node creates
+        a new scope.
+        """
         pass
 
     def render(self, context):
+        """
+        The method is responsible for converting the node to HTML using
+        the provided context.
+        """
         pass
 
     def exit_scope(self):
+        """
+        A hoop which gets called by the compiler during compilation
+        and performs cleanup. It is called when the node's scope is
+        about to get popped off the scope stack.
+        """
         pass
 
-    def remove_newline(self):
-        # if self.children:
-        #     child = self.children[0]
-        #     if isinstance(child, _Text):
-        #         child.text = NEWLINE.sub('', child.text)
-        raise NotImplementedError('sorry, yet to find an elegant way to remove newlines.')
-
     def render_children(self, context, children=None):
+        """
+        It is used to render children for a node which has a scope.
+        """
         if children is None:
             children = self.children
 
@@ -128,14 +163,28 @@ class _Node:
 
 
 class _ScopeNode(_Node):
+    """
+    There are five nodes which have scopes: _For, _If, _Set, _Raw,
+    _Block, _Escape.
+    """
     creates_scope = True
 
-    def save_end(self, frag):
-        self.end_node = frag
+    def save_end_tok(self, fragment):
+        """
+        Save close block fragment like endfor, endif, endset, endraw,
+        endblock, endescape.
+        """
+        self.end_tok = fragment
 
 
 class _Root(_Node):
+    """
+
+    """
     def render(self, context):
+        """
+
+        """
         children = self.children
 
         if isinstance(children[0], _Extends):
@@ -159,8 +208,10 @@ class _Root(_Node):
             return self.render_children(context)
 
 
-#test
 class _Extends(_Node):
+    """
+
+    """
     def process_fragment(self, fragment):
         filename = fragment.split()[1]
 
@@ -173,8 +224,8 @@ class _Extends(_Node):
             <header>This is the header.</header>
             {% block css %}css files{% endblock %}
             {% block content %}lorem{% endblock %}
-            {% block script %}script files{% endblock %}
-            <footer>This is the footer.{% block sub-content %}sub-lorem{% endblock %}</footer>
+            {% block sub-content %}sub-lorem{% endblock %}
+            <footer>This is the footer.</footer>
         </body>
         </html>
         """
@@ -185,15 +236,20 @@ class _Extends(_Node):
         return root.render(context)
 
 
-#test
 class _Block(_ScopeNode):
+    """
+
+    """
     def process_fragment(self, fragment):
         self.block_name = fragment.split()[1]
 
     def render(self, context):
-        if self.end_node.clean != 'endblock':
+        """
+
+        """
+        if self.end_tok.clean != 'endblock':
             raise TemplateError('"To match "%s", "endblock" is expected, but "%s" was found.' %
-                                (self.frag, self.end_node.clean))
+                                (self.frag, self.end_tok.clean))
 
         if self.ins.has_ancestor:
             result = self.render_children(context)
@@ -208,6 +264,9 @@ class _Block(_ScopeNode):
 
 
 class _Include(_Node):
+    """
+
+    """
     def process_fragment(self, fragment):
         # filename = fragment.split()[1]
         # self.filepath = os.path.join(os.getcwd(), filename)
@@ -223,6 +282,9 @@ class _Include(_Node):
 
 
 class _Text(_Node):
+    """
+
+    """
     def process_fragment(self, fragment):
         self.text = fragment
 
@@ -231,6 +293,9 @@ class _Text(_Node):
 
 
 class _Variable(_Node):
+    """
+
+    """
     def process_fragment(self, fragment):
         self.has_filter = False
         bits = fragment.split('|')
@@ -240,6 +305,9 @@ class _Variable(_Node):
             self.resolve_filter(bits)
 
     def resolve_filter(self, bits):
+        """
+
+        """
         bracket_reg = re.compile(r'(\(.*\))')
         self.callbacks = []
         funcs = map(do_trim, bits[1:])
@@ -261,6 +329,9 @@ class _Variable(_Node):
             self.callbacks.append([re_list[0], args, kwargs])
 
     def render(self, context):
+        """
+
+        """
         # The variable safe-flag is used to check whether the filter:safe exists in the filter list.
         # Escape should always happen at the last second of rendering,
         # because type of raw value does not necessarily be str.
@@ -291,11 +362,17 @@ class _Variable(_Node):
 
 
 class _Comment(_Node):
+    """
+
+    """
     def render(self, context):
         return ''
 
 
 class _Escape(_ScopeNode):
+    """
+
+    """
     def process_fragment(self, fragment):
         try:
             self.direc = fragment.split()[1]
@@ -305,8 +382,12 @@ class _Escape(_ScopeNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
-        if self.end_node.clean != 'endescape':
-            raise TemplateError('"%s" was found, but "endescape" is missing.' % self.frag)
+        """
+
+        """
+        if self.end_tok.clean != 'endescape':
+            raise TemplateError('"To match "%s", "endescape" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
 
         if self.direc in ['off', 'OFF']:
             new_dict = {'~>_<~': 'off'}
@@ -317,6 +398,9 @@ class _Escape(_ScopeNode):
 
 
 class _Set(_ScopeNode):
+    """
+
+    """
 
     def process_fragment(self, fragment):
         try:
@@ -327,8 +411,12 @@ class _Set(_ScopeNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
-        if self.end_node.clean != 'endset':
-            raise TemplateError('"%s" was found, but "endset" is missing.' % self.frag)
+        """
+
+        """
+        if self.end_tok.clean != 'endset':
+            raise TemplateError('"To match "%s", "endset" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
 
         new_context = {}
         for arg in self.args:
@@ -343,6 +431,9 @@ class _Set(_ScopeNode):
 
 
 class _For(_ScopeNode):
+    """
+
+    """
     def process_fragment(self, fragment):
 
         bits = WHITESPACE.split(fragment)
@@ -353,8 +444,12 @@ class _For(_ScopeNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
-        if self.end_node.clean != 'endfor':
-            raise TemplateError('"%s" was found, but "endfor" is missing.' % self.frag)
+        """
+
+        """
+        if self.end_tok.clean != 'endfor':
+            raise TemplateError('"To match "%s", "endfor" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
 
         items = eval(self.raw_expr, context, {})
 
@@ -383,9 +478,15 @@ class _For(_ScopeNode):
         return ''.join(loop_children)
 
     def exit_scope(self):
+        """
+
+        """
         self.branches = self.split_children()
 
     def split_children(self):
+        """
+
+        """
         if _Empty not in map(type, self.children):
             return [self.children, []]
 
@@ -400,11 +501,17 @@ class _For(_ScopeNode):
 
 
 class _Empty(_Node):
+    """
+
+    """
     def render(self, context):
         pass
 
 
 class _If(_ScopeNode):
+    """
+
+    """
     def process_fragment(self, fragment):
         try:
             self.expr = fragment.split()[1]
@@ -412,8 +519,9 @@ class _If(_ScopeNode):
             raise TemplateSyntaxError(fragment)
 
     def render(self, context):
-        if self.end_node.clean != 'endif':
-            raise TemplateError('"%s" was found, but "endif" is missing.' % self.frag)
+        if self.end_tok.clean != 'endif':
+            raise TemplateError('"To match "%s", "endif" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
 
         for branch in self.branches:
             con_bit = eval(branch[0], context, {})
@@ -426,7 +534,8 @@ class _If(_ScopeNode):
     def split_children(self):
         """
         branches:
-        a list that stores expr-branch pairs: [[if-expr,if-branch],[elif-expr,elif-branch],...[else-expr,else-branch]]
+        a list that stores expr-branch pairs: [[if-expr,if-branch],[elif-expr,elif-branch],
+        [else-expr,else-branch]]
         """
         branches = []
         branch = []
@@ -444,6 +553,9 @@ class _If(_ScopeNode):
 
 
 class _Elif(_Node):
+    """
+
+    """
     def process_fragment(self, fragment):
         try:
             self.expr = fragment.split()[1]
@@ -455,6 +567,9 @@ class _Elif(_Node):
 
 
 class _Else(_Node):
+    """
+
+    """
     def process_fragment(self, fragment):
         self.expr = '1'
 
@@ -463,40 +578,68 @@ class _Else(_Node):
 
 
 class _Raw(_ScopeNode):
+    """
+
+    """
     def process_fragment(self, fragment):
         pass
 
     def render(self, context):
-        if self.end_node.clean != 'endraw':
-            raise TemplateError('"%s" was found, but "endraw" is missing.' % self.frag)
+        if self.end_tok.clean != 'endraw':
+            raise TemplateError('"To match "%s", "endraw" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
         return ''.join(self.children)
 
 
-class _Call(_Node):
-    def process_fragment(self, fragment):
-        try:
-            bits = WHITESPACE.split(fragment, 1)
-            self.func = bits[1]
-        except (ValueError, IndexError):
-            raise TemplateSyntaxError(fragment)
-
-    def render(self, context):
-        return eval(self.func, context, {})
-
-
 class Compiler:
+    """
+    Compiler uses Abstract Syntax Trees(AST) to represent the structure
+    of a computer program. ASTs are the product of lexical analysis on
+    the source code. An AST has a lot of advantages over source code
+    since it does not contain unnecessary textual elements such as
+    delimiters. Furthermore, nodes in the tree can be enhanced with
+    attributes without altering the actual code.
+    The compiler will parse and analyse the template and build such
+    a tree to represent the compiled template.
+    """
     def __init__(self, ins):
         self.ins = ins
 
-    def add_content(self, template_string):
-        self.template_string = template_string
+    def add_content(self, path_or_string):
+        """
+        Add filepath or strings to the compiler.
+        """
+        # self.template_string = self.pre_compile(path_or_string)
+        if os.path.isfile(path_or_string):
+            filepath = path_or_string
+            ptn = re.compile(r'^\s*({%.*?%}|{#.*?#})')
+
+            def _file_generator(fp):
+                with open(fp, 'r') as f:
+                    line = f.readline()
+                    while line:
+
+                        if self.ins.remove_newlines and ptn.search(line):
+                            line = line.replace('\n', '').strip()
+                        yield line
+                        line = f.readline()
+            self.template_string = ''.join(_file_generator(filepath))
+        else:
+            self.template_string = path_or_string
 
     def each_fragment(self):
+        """Split the strings using regex. It is a generator."""
         for fragment in TOK_REGEX.split(self.template_string):
             if fragment:
                 yield _Fragment(fragment)
 
     def compile(self):
+        """
+        During compiling, we keep track of the current scope and new nodes
+        are added as children of that scope. Once we encounter a correct
+        closing tag we close the scope, pop it off the scope stack and set
+        the top of the stack as the new current scope.
+        """
         root = _Root(self.ins)
         scope_stack = [root]
         for fragment in self.each_fragment():
@@ -508,7 +651,7 @@ class Compiler:
                     parent_scope.children.append(fragment.raw)
                     continue
                 else:
-                    parent_scope.save_end(fragment)
+                    parent_scope.save_end_tok(fragment)
                     parent_scope.exit_scope()
                     scope_stack.pop()
                     continue
@@ -527,6 +670,10 @@ class Compiler:
         return root
 
     def create_node(self, fragment):
+        """
+        The method is used to create a node instance based on the fragment
+        it received.
+        """
         node_class = None
         if fragment.type == TEXT_FRAGMENT:
             node_class = _Text
@@ -552,8 +699,6 @@ class Compiler:
                 node_class = _Elif
             elif cmd == 'else':
                 node_class = _Else
-            elif cmd == 'call':
-                node_class = _Call
             elif cmd == 'set':
                 node_class = _Set
             elif cmd == 'raw':
@@ -568,12 +713,20 @@ class Compiler:
 
 
 class MiniTemplate:
+    """
+    Template class.
+    """
     global_context = {}
 
-    def __init__(self, contents=None):
+    def __init__(self, contents=None, remove_newlines=True):
+        """
+        When initialization, the MiniTemplate instance binds a Compiler object and passes
+        an reference to it. This reference will be passed to all nodes for the use of template
+        inheritance.
+        """
         self.has_ancestor = False
+        self.remove_newlines = remove_newlines
         self.block_dicts = []
-        # self.ancestor_stack = []
         self.compiler = Compiler(self)
         self.compiler.add_content(contents)
         self.root = self.compiler.compile()
@@ -602,7 +755,6 @@ class MiniTemplate:
         self.merged_kwargs = self.global_context.copy()
         self.merged_kwargs.update(kwargs)
         result = self.root.render(self.merged_kwargs)
-        print('block-dicts', self.block_dicts)
         return result
 
 
@@ -797,20 +949,24 @@ FILTERS = {
 
 if __name__ == '__main__':
 
-    cymoo = 'wake up, let us go home'
-    num = 13.2436
     motto = '醒醒我们回家了'
-    var = '1024*1024'
 
     persons = ['<cymoo>', 'colleen', 'ice', 'milkyway']
 
     raw = r"""
     {% extends test %}
     {% block content %}{{ motto }}{% endblock %}
-    {% block sub-content %}{{ cymoo }}{% endblock %}
+    {% block sub-content %}
+    {% for person in persons %}
+    {{ person | safe }}
+    {% endfor %}
+    {% endblock %}
     """
-
-    frags = TOK_REGEX.split(raw)
-    template = MiniTemplate(raw)
-    html = template.render(persons=persons, cymoo=cymoo, num=num, motto=motto, var=var)
+    path = '/Users/cymoo/Desktop/foo.html'
+    import time
+    t1 = time.time()
+    template = MiniTemplate(path)
+    html = template.render(persons=persons, motto=motto)
+    t2 = time.time()
     print(html)
+    print(t2-t1)

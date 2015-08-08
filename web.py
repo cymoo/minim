@@ -746,11 +746,7 @@ def render(template_name, **kwargs):
     if app.template_path is None:
         app.template_path = os.getcwd()
     full_path = os.path.join(app.template_path, app.template_folder, template_name)
-
-    with open(full_path) as f:
-        contents = f.read()
-        tpl = MiniTemplate(contents)
-
+    tpl = MiniTemplate(full_path)
     return tpl.render(**kwargs)
 
 
