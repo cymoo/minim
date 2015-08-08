@@ -213,25 +213,13 @@ class _Extends(_Node):
 
     """
     def process_fragment(self, fragment):
-        filename = fragment.split()[1]
+        self.filename = fragment.split()[1]
 
     def render(self, context):
-
-        string = r"""
-        <html>
-        <head><title>wake up</title></head>
-        <body>
-            <header>This is the header.</header>
-            {% block css %}css files{% endblock %}
-            {% block content %}lorem{% endblock %}
-            {% block sub-content %}sub-lorem{% endblock %}
-            <footer>This is the footer.</footer>
-        </body>
-        </html>
-        """
+        filepath = os.path.join(self.ins.template_dir, self.filename)
 
         compiler = self.ins.compiler
-        compiler.add_content(string)
+        compiler.add_content(filepath)
         root = compiler.compile()
         return root.render(context)
 
@@ -268,17 +256,15 @@ class _Include(_Node):
 
     """
     def process_fragment(self, fragment):
-        # filename = fragment.split()[1]
-        # self.filepath = os.path.join(os.getcwd(), filename)
-        self.filepath = '/path/to/file'
+        self.filename = fragment.split()[1]
 
     def render(self, context):
-        # with open(self.filepath) as f:
-        #     contents = f.read()
-        #     tpl = MiniTemplate(contents)
-        #
-        # return tpl.root.render(context)
-        pass
+        filepath = os.path.join(self.ins.template_dir, self.filename)
+
+        compiler = self.ins.compiler
+        compiler.add_content(filepath)
+        root = compiler.compile()
+        return root.render(context)
 
 
 class _Text(_Node):
@@ -612,6 +598,7 @@ class Compiler:
         # self.template_string = self.pre_compile(path_or_string)
         if os.path.isfile(path_or_string):
             filepath = path_or_string
+            self.ins.template_dir = os.path.dirname(filepath)
             ptn = re.compile(r'^\s*({%.*?%}|{#.*?#})')
 
             def _file_generator(fp):
@@ -724,6 +711,7 @@ class MiniTemplate:
         an reference to it. This reference will be passed to all nodes for the use of template
         inheritance.
         """
+        self.template_dir = None
         self.has_ancestor = False
         self.remove_newlines = remove_newlines
         self.block_dicts = []

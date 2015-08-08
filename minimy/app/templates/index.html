@@ -1,15 +1,12 @@
-<!DOCTYPE html>
-<html>
-<head lang="zh-CN">
-    <meta charset="UTF-8">
-    <title>Hello Minim</title>
-</head>
-<body>
-<h1 style="margin-top: 30px; text-align: center;">{{ motto }}</h1>
-<section>
-    <ul>
+{% extends base.html %}
 
-    </ul>
-</section>
-</body>
-</html>
+{% block content %}
+    <section>
+        <ul>
+            {% for i in motto %}
+            <li>{{ i }}</li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% include _frag.html %}
+{% endblock %}

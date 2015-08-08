@@ -1,3 +1,24 @@
-{% for i in motto %}
-{{ i }}
-{% end %}
+<!DOCTYPE html>
+<html>
+    <head lang="zh-CN">
+        <meta charset="UTF-8">
+        <title>Hello Minim</title>
+    </head>
+    <body>
+    <header>
+        <nav>
+            <ul>
+                <li><a href="">index</a></li>
+                <li><a href="">blog</a></li>
+                <li><a href="">contact</a></li>
+                <li><a href="">about</a></li>
+            </ul>
+        </nav>
+    </header>
+    <h1>{{ greetings }}</h1>
+    {% block content %}{% endblock %}
+    <footer>
+        <p style="text-align: center;"><a href="">Powered by Minim/0.1</a></p>
+    </footer>
+    </body>
+</html>
