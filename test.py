@@ -169,8 +169,19 @@ from web import Minim, response_header_dict, Route, Router
 #
 # app.run()
 
-from template import MiniTemplate
-contents = '<ul>{% foreach my_var %}<li>{{ item }}</li>{% end %}</ul>'
-my_var = [1, 3]
-tpl = MiniTemplate(contents)
-print(tpl.render(my_var=my_var))
+from web import Minim, request
+
+app = Minim()
+
+
+@app.get('/')
+def index():
+    request.foo = 'bar'
+    print(request.environ['multithread'])
+    print('in index: ', request.foo)
+    return 'wake up, let us go home.'
+
+@app.get('/home')
+def home():
+    print('in home', request.foo)
+    return 'do not go gentle into that good night.'

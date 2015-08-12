@@ -1,6 +1,7 @@
 #coding:utf-8
 
 import os
+import sys
 import threading
 import re
 import cgi
@@ -30,6 +31,12 @@ class Dict(dict):
 
     def __setattr__(self, key, value):
         self[key] = value
+
+    def __delattr__(self, key):
+        try:
+            del self[key]
+        except KeyError:
+            raise AttributeError
 
 
 # convert tuple, list, set to list
@@ -160,12 +167,13 @@ class HttpError(Exception):
     """
     HttpError that defines http error code.
     """
-    def __init__(self, code):
+    def __init__(self, code, msg=''):
         """
         Init an HttpError with response code.
         """
         super(HttpError, self).__init__()
         self.status = '%d %s' % (code, _RESPONSE_STATUSES[code])
+        self.msg = msg
 
     def header(self, name, value):
         if not hasattr(self, '_headers'):
@@ -179,7 +187,7 @@ class HttpError(Exception):
         return []
 
     def __str__(self):
-        return self.status
+        return self.status + ': ' + self.msg if self.msg else self.status
 
     __repr__ = __str__
 
@@ -286,8 +294,8 @@ def _to_bytes(s):
 
 
 class Request(threading.local):
-    def __init__(self, environ=None):
-        super().__init__()
+    def bind(self, environ=None):
+        # super().__init__()
         self._environ = {} if environ is None else environ
         self._GET = None
         self._POST = None
@@ -297,8 +305,8 @@ class Request(threading.local):
         # if not self.path.startswith('/'):
         #     self.path += '/'
 
-    def bind(self, environ):
-        self._environ = environ
+    # def bind(self, environ):
+    #     self._environ = environ
 
     @property
     def method(self):
@@ -452,11 +460,11 @@ class Response(threading.local):
             key = name
         self._headers[key] = value
 
-    def set_cookie(self, name, value, secret=None, **options):
+    def set_cookie(self, name, value, **options):
         if not self._cookies:
             self._cookies = SimpleCookie()
-        if secret:
-            pass
+        # if secret:
+        #     pass
 
         if len(value) > 4096:
             raise ValueError('Cookie value too long.')
@@ -653,9 +661,6 @@ class Minim:
     def delete(self, rule, methods='DELETE'):
         return self.route(rule=rule, methods=methods)
 
-    def patch(self, rule, methods='PATCH'):
-        return self.route(rule=rule, methods=methods)
-
     def head(self, path):
         pass
 
@@ -711,6 +716,8 @@ class Minim:
             out = []
             response.set_header('Content-Length', '0')
         elif isinstance(out, str):
+            # test
+            response.set_header('Content-Length', str(len(out.encode('utf-8'))))
             out = [out.encode('utf-8')]
         elif isinstance(out, bytes):
             out = [out]
@@ -735,7 +742,8 @@ class Minim:
 
     def run(self, host='127.0.0.1', port=9000):
         from wsgiref.simple_server import make_server
-        logging.warning('application will start at %s:%s...' % (host, port))
+        sys.stderr.write('Minim is running...Hit Ctrl-C to quit.\n')
+        sys.stderr.write('Listening on http://%s:%d/.\n' % (host, port))
         server = make_server(host, port, self)
         server.serve_forever()
 

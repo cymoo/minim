@@ -595,21 +595,33 @@ class Compiler:
         """
         Add filepath or strings to the compiler.
         """
-        # self.template_string = self.pre_compile(path_or_string)
         if os.path.isfile(path_or_string):
             filepath = path_or_string
             self.ins.template_dir = os.path.dirname(filepath)
             ptn = re.compile(r'^\s*({%.*?%}|{#.*?#})')
+            raw_ptn = re.compile(r'{%\s*raw\s*%}')
+            end_raw_ptn = re.compile(r'{%\s*endraw\s*%}')
 
             def _file_generator(fp):
+                raw_scope = False
                 with open(fp, 'r') as f:
                     line = f.readline()
-                    while line:
+                    if self.ins.remove_newlines:
+                        while line:
+                            if end_raw_ptn.search(line):
+                                raw_scope = False
+                            if ptn.search(line) and not raw_scope:
+                                line = line.replace('\n', '').strip()
+                            yield line
+                            if raw_ptn.search(line) and not end_raw_ptn.search(line):
+                                raw_scope = True
+                            line = f.readline()
 
-                        if self.ins.remove_newlines and ptn.search(line):
-                            line = line.replace('\n', '').strip()
-                        yield line
-                        line = f.readline()
+                    else:
+                        while line:
+                            yield line
+                            line = f.readline()
+
             self.template_string = ''.join(_file_generator(filepath))
         else:
             self.template_string = path_or_string

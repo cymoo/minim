@@ -1,4 +1,4 @@
-from web import Minim, render
+from web import Minim, render, request, response, g
 from template import MiniTemplate
 
 app = Minim()
@@ -13,15 +13,17 @@ def favicon():
 
 @app.get('/')
 def index():
+    # request.foo = 'bar'
+    # print(request.foo)
+    print(request.environ['wsgi.multithread'])
     welcome = 'Keep calm and carry on!'
     motto = ['醒醒我们回家了', '世界是我的表象', '向死而生', '凡人所有的我都有']
-    return render('index.html', motto=motto, welcome=welcome, name='colleen')
+    return render('index.html', motto=motto, welcome=welcome)
 
 
 @app.get('/home')
 def home():
-    welcome = 'will my will'
-    motto = ['醒醒我们回家了', '世界是我的表象', '向死而生', '凡人所有的我都有']
-    return render('home.html', motto=motto, welcome=welcome)
+    # print(request.foo)
+    return 'do not go gentle into that good night.'
 
 app.run()
