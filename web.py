@@ -15,6 +15,8 @@ from json import dumps as json_dumps
 
 from io import StringIO
 
+# from session import Session
+
 
 # Dict object:
 class Dict(dict):
@@ -294,13 +296,16 @@ def _to_bytes(s):
 
 
 class Request(threading.local):
+
+    # __slots__ = ('_environ',)
+
     def bind(self, environ=None):
         # super().__init__()
         self._environ = {} if environ is None else environ
-        self._GET = None
-        self._POST = None
-        self._COOKIES = None
-        self._HEADERS = None
+        # self._GET = None
+        # self._POST = None
+        # self._COOKIES = None
+        # self._HEADERS = None
         # self.path = self._environ.get('PATH_INFO', '/').strip()
         # if not self.path.startswith('/'):
         #     self.path += '/'
@@ -732,10 +737,16 @@ class Minim:
         pass
 
     def wsgi(self, environ, start_response):
-        out = self._cast(self._handle(environ))
-        start_response(response.status, response.headers)
+        try:
+            out = self._cast(self._handle(environ))
+            start_response(response.status, response.headers)
 
-        return out
+            return out
+        finally:
+            del request._environ
+            response._cookies = None
+            response._status = '200 OK'
+            response._headers = {'CONTENT-TYPE': 'text/html; charset=UTF-8'}
 
     def __call__(self, environ, start_response):
         return self.wsgi(environ, start_response)
@@ -779,5 +790,6 @@ class AppStack(list):
 
 request = Request()
 response = Response()
+# session = Session()
 g = threading.local()
 app_stack = AppStack()

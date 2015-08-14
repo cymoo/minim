@@ -634,8 +634,8 @@ class Compiler:
 
     def compile(self):
         """
-        During compiling, we keep track of the current scope and new nodes
-        are added as children of that scope. Once we encounter a correct
+        During compiling, keep track of the current scope and new nodes
+        are added as children of that scope. Once encounter a correct
         closing tag we close the scope, pop it off the scope stack and set
         the top of the stack as the new current scope.
         """
@@ -745,7 +745,7 @@ class MiniTemplate:
     def add_filter(name, callback):
         """
         Add a filter to the template; a filter is used to alter the original value.
-        Filter function should not do complex logic.
+        Filter function should not perform complex logic.
         """
         if not isinstance(name, str):
             raise Exception("Filter-<%s> name should be a str." % str(callback))

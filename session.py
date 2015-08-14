@@ -287,3 +287,11 @@ class DBStore(Store):
         last_allowed_time = datetime.datetime.now() - timeout
         self.db.delete(self.table, where="$last_allowed_time > atime", vars=locals())
 
+
+class RedisStore(Store):
+    pass
+
+
+class MemCachedStore(Store):
+    pass
+

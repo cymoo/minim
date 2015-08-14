@@ -174,10 +174,14 @@ from web import Minim, request
 app = Minim()
 
 
+@app.get('/favicon.ico')
+def favicon():
+    return ''
+
+
 @app.get('/')
 def index():
     request.foo = 'bar'
-    print(request.environ['multithread'])
     print('in index: ', request.foo)
     return 'wake up, let us go home.'
 
