@@ -8,4 +8,12 @@
             {% endfor %}
         </ul>
     </section>
+    <hr/>
+    <section>
+    <ul>
+        {% for person in persons %}
+            <li>{{ person.name }}, {{ person.motto }}</li>
+        {% endfor %}
+    </ul>
+    </section>
 {% endblock %}

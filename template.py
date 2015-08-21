@@ -4,6 +4,16 @@ import ast
 import os
 from random import choice
 
+__all__ = [
+    'TemplateError', 'TemplateFilterError', 'TemplateSyntaxError', 'TemplateContextError',
+    '_Fragment', '_Node', '_ScopeNode', '_Root',
+    '_Extends', '_Block', '_Include',
+    '_Text', '_Variable', '_Comment',
+    '_Escape', '_Set', '_For', '_Empty',
+    '_If', '_Elif', '_Else', '_Raw',
+    'Compiler', 'MiniTemplate'
+]
+
 VAR_FRAGMENT = 0
 OPEN_BLOCK_FRAGMENT = 1
 CLOSE_BLOCK_FRAGMENT = 2
@@ -439,6 +449,7 @@ class _For(_ScopeNode):
 
         items = eval(self.raw_expr, context, {})
 
+
         loop_attr = {'length': len(items), 'index': 0, 'first': False, 'last': False}
         loop = type('_Loop', (), loop_attr)
 
@@ -758,7 +769,12 @@ class MiniTemplate:
         return result
 
 
-# utils
+### utils ###
+
+def safe_eval(expr, context):
+    pass
+
+
 def html_escape(s):
     """ Escape HTML special characters ``&<>`` and quotes ``'"``. """
     return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')\

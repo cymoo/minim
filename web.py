@@ -465,11 +465,10 @@ class Response(threading.local):
             key = name
         self._headers[key] = value
 
+    # the options are max_age, expires, path, domain, httponly, secure
     def set_cookie(self, name, value, **options):
         if not self._cookies:
             self._cookies = SimpleCookie()
-        # if secret:
-        #     pass
 
         if len(value) > 4096:
             raise ValueError('Cookie value too long.')
@@ -485,9 +484,8 @@ class Response(threading.local):
                 elif isinstance(v, (int, float)):
                     v = time.gmtime(v)
                 v = time.strftime('%a, %d %b %Y %H:%M:%S GMT', v)
-            if k in ('secure', 'httponly') and not v:
-                continue
-
+            # if k in ('secure', 'httponly') and not v:
+            #     continue
             self._cookies[name][k.replace('_', '-')] = v
 
     def delete_cookie(self, key, **kw):
@@ -767,6 +765,16 @@ def render(template_name, **kwargs):
     full_path = os.path.join(app.template_path, app.template_folder, template_name)
     tpl = MiniTemplate(full_path)
     return tpl.render(**kwargs)
+
+
+# utils
+
+class ConfigDict(dict):
+    pass
+
+
+class FileUpload:
+    pass
 
 
 class AppStack(list):

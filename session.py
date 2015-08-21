@@ -7,6 +7,7 @@ import random
 import base64
 from copy import deepcopy
 import pickle
+import shelve
 from hashlib import sha1
 
 from web import HttpError, Dict, request, response
@@ -124,7 +125,7 @@ class Session(threading.local):
         else:
             self._set_cookie(self.session_id, expires=-1)
 
-    def _set_cookie(self, session_id, expires=None, **kw):
+    def _set_cookie(self, session_id, expires=None):
         cookie_name = self.cookie_name
         cookie_domain = self.cookie_domain
         cookie_path = self.cookie_path
@@ -199,7 +200,7 @@ class Store:
         return pickle.loads(pickled)
 
 
-class DiskStore(Store):
+class PickleStore(Store):
     def __init__(self, root):
         if not os.path.exists(root):
             os.makedirs(os.path.abspath(root))
@@ -286,6 +287,35 @@ class DBStore(Store):
         timeout = datetime.timedelta(timeout/(24.0*60*60))
         last_allowed_time = datetime.datetime.now() - timeout
         self.db.delete(self.table, where="$last_allowed_time > atime", vars=locals())
+
+
+class ShelfStore:
+    def __init__(self, shelf):
+        self.shelf = shelf
+
+    def __contains__(self, key):
+        return key in self.shelf
+
+    def __getitem__(self, key):
+        atime, v = self.shelf[key]
+        self[key] = v
+        return v
+
+    def __setitem__(self, key, value):
+        self.shelf[key] = time.time(), value
+
+    def __delitem__(self, key):
+        try:
+            del self.shelf[key]
+        except KeyError:
+            pass
+
+    def cleanup(self, timeout):
+        now = time.time()
+        for k in self.shelf.keys():
+            atime, v = self.shelf[k]
+            if now - atime > timeout:
+                del self[k]
 
 
 class RedisStore(Store):

@@ -2807,6 +2807,10 @@ class SelectQuery(Query):
     def __iter__(self):
         return iter(self.execute())
 
+    # cymoo modified 20150815
+    def __len__(self):
+        return len(list(self.__iter__()))
+
     def iterator(self):
         return iter(self.execute().iterator())
 
