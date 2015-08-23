@@ -15,6 +15,10 @@ from json import dumps as json_dumps
 
 from io import StringIO
 
+from utils import make_list
+from http_constants import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
+    RESPONSE_STATUSES, HEADER_X_POWERED_BY
+
 # from session import Session
 
 
@@ -41,130 +45,6 @@ class Dict(dict):
             raise AttributeError
 
 
-# convert tuple, list, set to list
-def make_list(data):
-    if isinstance(data, (tuple, list, set)):
-        return list(data)
-    elif data:
-        return [data]
-    else:
-        return []
-
-
-# all known response statues:
-
-_RESPONSE_STATUSES = {
-    # Informational
-    100: 'Continue',
-    101: 'Switching Protocols',
-    102: 'Processing',
-
-    # Successful
-    200: 'OK',
-    201: 'Created',
-    202: 'Accepted',
-    203: 'Non-Authoritative Information',
-    204: 'No Content',
-    205: 'Reset Content',
-    206: 'Partial Content',
-    207: 'Multi Status',
-    226: 'IM Used',
-
-    # Redirection
-    300: 'Multiple Choices',
-    301: 'Moved Permanently',
-    302: 'Found',
-    303: 'See Other',
-    304: 'Not Modified',
-    305: 'Use Proxy',
-    307: 'Temporary Redirect',
-
-    # Client Error
-    400: 'Bad Request',
-    401: 'Unauthorized',
-    402: 'Payment Required',
-    403: 'Forbidden',
-    404: 'Not Found',
-    405: 'Method Not Allowed',
-    406: 'Not Acceptable',
-    407: 'Proxy Authentication Required',
-    408: 'Request Timeout',
-    409: 'Conflict',
-    410: 'Gone',
-    411: 'Length Required',
-    412: 'Precondition Failed',
-    413: 'Request Entity Too Large',
-    414: 'Request URI Too Long',
-    415: 'Unsupported Media Type',
-    416: 'Requested Range Not Satisfiable',
-    417: 'Expectation Failed',
-    418: "I'm a teapot",
-    422: 'Unprocessable Entity',
-    423: 'Locked',
-    424: 'Failed Dependency',
-    426: 'Upgrade Required',
-
-    # Server Error
-    500: 'Internal Server Error',
-    501: 'Not Implemented',
-    502: 'Bad Gateway',
-    503: 'Service Unavailable',
-    504: 'Gateway Timeout',
-    505: 'HTTP Version Not Supported',
-    507: 'Insufficient Storage',
-    510: 'Not Extended',
-}
-
-# _RE_RESPONSE_STATUS = re.compile(r'^\d\d\d( [\w ]+)?$')
-
-_RESPONSE_HEADERS = (
-    'Accept-Ranges',
-    'Age',
-    'Allow',
-    'Cache-Control',
-    'Connection',
-    'Content-Encoding',
-    'Content-Language',
-    'Content-Length',
-    'Content-Location',
-    'Content-MD5',
-    'Content-Disposition',
-    'Content-Range',
-    'Content-Type',
-    'Date',
-    'ETag',
-    'Expires',
-    'Last-Modified',
-    'Link',
-    'Location',
-    'P3P',
-    'Pragma',
-    'Proxy-Authenticate',
-    'Refresh',
-    'Retry-After',
-    'Server',
-    'Set-Cookie',
-    'Strict-Transport-Security',
-    'Trailer',
-    'Transfer-Encoding',
-    'Vary',
-    'Via',
-    'Warning',
-    'WWW-Authenticate',
-    'X-Frame-Options',
-    'X-XSS-Protection',
-    'X-Content-Type-Options',
-    'X-Forwarded-Proto',
-    'X-Powered-By',
-    'X-UA-Compatible',
-)
-
-_RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), _RESPONSE_HEADERS), _RESPONSE_HEADERS))
-
-response_header_dict = _RESPONSE_HEADER_DICT
-_HEADER_X_POWERED_BY = ('X-Powered-By', 'minim/0.1')
-
-
 class HttpError(Exception):
     """
     HttpError that defines http error code.
@@ -174,12 +54,12 @@ class HttpError(Exception):
         Init an HttpError with response code.
         """
         super(HttpError, self).__init__()
-        self.status = '%d %s' % (code, _RESPONSE_STATUSES[code])
+        self.status = '%d %s' % (code, RESPONSE_STATUSES[code])
         self.msg = msg
 
     def header(self, name, value):
         if not hasattr(self, '_headers'):
-            self._headers = [_HEADER_X_POWERED_BY]
+            self._headers = [HEADER_X_POWERED_BY]
         self._headers.append((name, value))
 
     @property
@@ -427,7 +307,7 @@ class Response(threading.local):
     def status(self, value):
         if isinstance(value, int):
             if 100 <= value <= 999:
-                status_str = _RESPONSE_STATUSES.get(value, '')
+                status_str = RESPONSE_STATUSES.get(value, '')
                 if status_str:
                     self._status = '%d %s' % (value, status_str)
                 else:
@@ -439,29 +319,29 @@ class Response(threading.local):
 
     @property
     def headers(self):
-        l = [(_RESPONSE_HEADER_DICT.get(k, k), v) for k, v in self._headers.items()]
+        l = [(RESPONSE_HEADER_DICT.get(k, k), v) for k, v in self._headers.items()]
         if self._cookies is not None:
             for v in self._cookies.values():
                 l.append(('Set-Cookie', v))
-        l.append(_HEADER_X_POWERED_BY)
+        l.append(HEADER_X_POWERED_BY)
         return l
 
     def header(self, name):
         key = name.upper()
-        if not key in _RESPONSE_HEADER_DICT:
+        if not key in RESPONSE_HEADER_DICT:
             key = name
         return self._headers.get(key)
 
     def unset_header(self, name):
         key = name.upper()
-        if not key in _RESPONSE_HEADER_DICT:
+        if not key in RESPONSE_HEADER_DICT:
             key = name
         if key in self._headers:
             del self._headers[key]
 
     def set_header(self, name, value):
         key = name.upper()
-        if not key in _RESPONSE_HEADER_DICT:
+        if not key in RESPONSE_HEADER_DICT:
             key = name
         self._headers[key] = value
 
@@ -765,12 +645,6 @@ def render(template_name, **kwargs):
     full_path = os.path.join(app.template_path, app.template_folder, template_name)
     tpl = MiniTemplate(full_path)
     return tpl.render(**kwargs)
-
-
-# utils
-
-class ConfigDict(dict):
-    pass
 
 
 class FileUpload:
