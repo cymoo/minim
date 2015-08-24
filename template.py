@@ -749,7 +749,7 @@ class MiniTemplate:
         The variables which have the same name with ones in the local context will be substituted.
         """
         if not isinstance(name, str):
-            raise Exception("<class 'str'> expected, but type of %s is %s." % (name, type(name)))
+            raise TypeError("<class 'str'> expected, but type of %s is %s." % (name, type(name)))
         cls.global_context[name] = value
 
     @staticmethod

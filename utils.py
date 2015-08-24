@@ -1,6 +1,10 @@
 # Common Utilities
+import sys
+import os
+import json
 from collections.abc import MutableMapping
 import functools
+from configparser import ConfigParser
 
 __all__ = [
 
@@ -26,9 +30,6 @@ class DictProperty:
         self.getter, self.key = func, self.key or func.__name__
         return self
 
-    def get_doc(self):
-        return self.__doc__
-
     def __get__(self, obj, cls):
         if obj is None:
             return self
@@ -48,21 +49,31 @@ class DictProperty:
         del getattr(obj, self.attr)[self.key]
 
 
-# what is PEP8?
 class cached_property:
     """
-    A property that is only computed once per instance and then replaces
-    itself with an ordinary attribute. Deleting the attribute resets the
-    property.
+    A decorator that converts a function into a lazy property.
+    The function is wrapped is called the first time to retrieve
+    the result and then that calculated result is used the next time
+    you access the value.
+    The class has to have a '__dict__' in order for this property to work.
     """
-    def __init__(self, func):
+    def __init__(self, func, name=None, doc=None):
+        self.__name__ = name or func.__name__
+        self.__module__ = func.__module__
+        self.__doc__ = doc or func.__doc__
         self.func = func
 
     def __get__(self, obj, cls):
         if obj is None:
             return self
-        value = obj.__dict__[self.func.__name__] = self.func(obj)
+        value = obj.__dict__.get(self.__name__, None)
+        if value is None:
+            value = self.func(obj)
+            obj.__dict__[self.__name__] = value
         return value
+
+    def __set__(self, obj, value):
+        obj.__dict__[self.__name__] = value
 
 
 class lazy_attribute:
@@ -214,7 +225,119 @@ class WSGIHeaderDict(MutableMapping):
 
 
 class ConfigDict(dict):
-    pass
+
+    def __init__(self, root_path, defaults=None):
+        super().__init__(defaults or {})
+        self.root_path = root_path
+
+    def load_from_dict(self, source, namespace=''):
+        """Load values from a dict. Nesting can be used to represent namespaces."""
+        for key, value in source.items():
+            if isinstance(key, str):
+                nskey = (namespace + '.' + key).strip('.')
+                if isinstance(value, dict):
+                    self.load_from_dict(value, namespace=nskey)
+                else:
+                    self[nskey] = value
+            else:
+                raise TypeError("<class 'str'> expected, but type of %s is %s." % (key, type(key)))
+        return self
+
+    def load_from_json(self, filename):
+        """
+        Load values from a json file.
+        This function behaves as if the json object was a dictionary and
+        passed to the "load_from_dict" function.
+        """
+        filename = os.path.join(self.root_path, filename)
+        try:
+            with open(filename) as json_file:
+                obj = json.loads(json_file.read())
+        except IOError:
+            raise IOError("Unable to load JSON file (%s)." % filename)
+        return self.load_from_dict(obj)
+
+    def load_from_config(self, filename):
+        """
+        Load values from an "*.ini" config file.
+        If the config files contains sections, their names are used as namespaces for
+        the values within. The two special sections "DEFAULT" and "minim" refer to
+        the root namespace (no prefix)
+        """
+        conf = ConfigParser()
+        filename = os.path.join(self.root_path, filename)
+        conf.read(filename)
+        for section in conf.sections():
+            for key, value in conf.items(section):
+                if section not in ('DEFAULT', 'minim'):
+                    key = section + '.' + key
+                section[key] = value
+        return self
+
+    def load_from_object(self, obj):
+        """
+        Load values from a class or an instance.
+        An object can be of one of the following two types:
+          1. a string: in this case the object with that name will be imported
+          2. an actual object reference: that object is used directed
+        Objects are usually either modules or classes.
+        Just the uppercase variables in that object are stored in that config.
+        """
+        if isinstance(obj, str):
+            obj = import_from_string(obj)
+        for key in dir(obj):
+            if key.isupper():
+                self[key] = getattr(obj, key)
+
+
+def secure_filename(filename):
+    """
+    Pass it a filename and it will return a secure version of it.
+    This filename can then safely be stored on a regular file system
+    and passed to :func: "os.path.join". The filename returned is an
+    ASCII only string for maximum portability(?).
+    """
+    # to check and change the filename.
+    # ...
+    return filename
+
+
+def import_from_string(import_name):
+    """
+    Imports an object based on a string. This is useful if you want
+    to use import paths as endpoints or something similar. An import
+    path can be specified either in dotted notation("collections.abc.MutableMapping")
+    or with a colon as object delimiter("collections.abc:MutableMapping")
+
+    :param import_name: the dotted name for the object to import.
+    :return: imported object
+    """
+
+    import_name = str(import_name).replace(':', '.')
+    try:
+        try:
+            __import__(import_name)
+        except ImportError:
+            if '.' not in import_name:
+                raise
+        else:
+            return sys.modules[import_name]
+
+        module_name, obj_name = import_name.rsplit('.', 1)
+        try:
+            module = __import__(module_name, None, None, [obj_name])
+        except ImportError:
+            # support importing modules not yet set up by the parent module
+            # (or package for that matter)
+            module = import_from_string(module_name)
+
+        try:
+            return getattr(module, obj_name)
+        except AttributeError as e:
+            raise ImportError(e)
+
+    except ImportError:
+        raise ImportError("cannot import module from %s." % import_name)
 
 
 if __name__ == '__main__':
@@ -234,6 +357,11 @@ if __name__ == '__main__':
             """bar"""
             return 'calm down'
 
+        @cached_property
+        def bar1(self):
+            print('haha')
+            return 'bar1'
+
         # def _cookie(self):
         #     """test"""
         #     return 'fight'
@@ -241,12 +369,7 @@ if __name__ == '__main__':
         # cookie = tmp(_cookie)
 
     foo = Foo({'method': 'GET', 'path': '/index'})
-    print(foo.cookie)
-    print(foo.environ)
-
-    # print(foo.bar)
-    # print(Foo.bar)
-    # foo.cookie = 13
     # print(foo.cookie)
     # print(foo.environ)
-    # print(foo.cookie)
+    print(foo.bar1)
+    print('2', foo.bar1)

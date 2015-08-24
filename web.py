@@ -15,7 +15,7 @@ from json import dumps as json_dumps
 
 from io import StringIO
 
-from utils import make_list
+from utils import make_list, ConfigDict
 from http_constants import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
     RESPONSE_STATUSES, HEADER_X_POWERED_BY
 
@@ -25,7 +25,8 @@ from http_constants import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
 # Dict object:
 class Dict(dict):
     def __init__(self, names=(), values=(), **kw):
-        super(Dict, self).__init__(**kw)
+        # super(Dict, self).__init__(**kw)
+        super().__init__(**kw)
         for k, v in zip(names, values):
             self[k] = v
 
@@ -224,6 +225,8 @@ class Request(threading.local):
                 self._GET[key] = value
         return self._GET
 
+    query = GET
+
     @property
     def POST(self):
         raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
@@ -236,6 +239,8 @@ class Request(threading.local):
             else:
                 self._POST[key] = raw_data[key].value
         return self._POST
+
+    post = POST
 
     @property
     def cookies(self):
@@ -515,6 +520,7 @@ class Cache:
 class Minim:
     def __init__(self, import_name=__name__, template_path=None, static_path=None,
                  template_folder='templates', static_folder='static', auto_json=True, **kw):
+        self.config = ConfigDict(import_name)  # ...
         self.import_name = import_name
         self.template_path = template_path
         self.static_path = static_path
