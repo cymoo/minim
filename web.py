@@ -513,10 +513,6 @@ class Route:
         self.callback = callback
 
 
-class Cache:
-    pass
-
-
 class Minim:
     def __init__(self, import_name=__name__, template_path=None, static_path=None,
                  template_folder='templates', static_folder='static', auto_json=True, **kw):
@@ -617,7 +613,7 @@ class Minim:
             raise TypeError('Request handler returned [%s] which is not iterable.' % type(out).__name__)
         return out
 
-    def cached(self, max_age=None, max_page_num=None):
+    def cached(self, timeout=None):
         pass
 
     def wsgi(self, environ, start_response):

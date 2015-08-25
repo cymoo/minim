@@ -1,10 +1,13 @@
 # Common Utilities
 import sys
 import os
+import re
 import json
 from collections.abc import MutableMapping
+from threading import RLock
 import functools
 from configparser import ConfigParser
+from unicodedata import normalize
 
 __all__ = [
 
@@ -26,8 +29,11 @@ class DictProperty:
         self.attr, self.key, self.read_only = attr, key, read_only
 
     def __call__(self, func):
-        functools.update_wrapper(self, func, updated=[])
-        self.getter, self.key = func, self.key or func.__name__
+        # functools.update_wrapper(self, func, updated=[])
+        self.__doc__ = func.__doc__
+        self.__module = func.__module__
+        self.__name__ = func.__name__
+        self.func, self.key = func, self.key or func.__name__
         return self
 
     def __get__(self, obj, cls):
@@ -35,7 +41,7 @@ class DictProperty:
             return self
         key, storage = self.key, getattr(obj, self.attr)
         if key not in storage:
-            storage[key] = self.getter(obj)
+            storage[key] = self.func(obj)
         return storage[key]
 
     def __set__(self, obj, value):
@@ -56,21 +62,25 @@ class cached_property:
     the result and then that calculated result is used the next time
     you access the value.
     The class has to have a '__dict__' in order for this property to work.
+
+    It has a lock for thread safety.
     """
     def __init__(self, func, name=None, doc=None):
         self.__name__ = name or func.__name__
         self.__module__ = func.__module__
         self.__doc__ = doc or func.__doc__
         self.func = func
+        self.lock = RLock()
 
     def __get__(self, obj, cls):
         if obj is None:
             return self
-        value = obj.__dict__.get(self.__name__, None)
-        if value is None:
-            value = self.func(obj)
-            obj.__dict__[self.__name__] = value
-        return value
+        with self.lock:
+            value = obj.__dict__.get(self.__name__, None)
+            if value is None:
+                value = self.func(obj)
+                obj.__dict__[self.__name__] = value
+            return value
 
     def __set__(self, obj, value):
         obj.__dict__[self.__name__] = value
@@ -78,8 +88,11 @@ class cached_property:
 
 class lazy_attribute:
     """A property that caches itself to the class object."""
-    def __init__(self, func):
-        functools.update_wrapper(self, func, updated=[])
+    def __init__(self, func, name=None, doc=None):
+        # functools.update_wrapper(self, func, updated=[])
+        self.__name__ = name or func.__name__
+        self.__module__ = func.__module__
+        self.__doc__ = doc or func.__doc__
         self.func = func
 
     def __get__(self, obj, cls):
@@ -133,7 +146,7 @@ class MultiDict(MutableMapping):
         :param default: The default value to be returned if the key in not present
                         or the type conversion fails.
         :param index: An index for the list of available values.
-        :param type: If defined, this callable is used to cast the value into a
+        :param cast_to: If defined, this callable is used to cast the value into a
                      specific type. Exception are suppressed and result in the
                      default value to be returned.
         """
@@ -294,11 +307,15 @@ def secure_filename(filename):
     """
     Pass it a filename and it will return a secure version of it.
     This filename can then safely be stored on a regular file system
-    and passed to :func: "os.path.join". The filename returned is an
-    ASCII only string for maximum portability(?).
+    and passed to :func: "os.path.join".
     """
-    # to check and change the filename.
-    # ...
+    if not isinstance(filename, str):
+        filename = filename.decode('utf8')
+    filename = normalize('NFKD', filename)
+    # filename = filename.encode('ASCII', 'ignore').decode('ASCII')
+    filename = os.path.basename(filename.replace('\\', os.path.sep))
+    filename = re.sub(r'[^a-zA-Z0-9\u4e00-\u9fa5_.\s]', '', filename).strip()
+    filename = re.sub(r'[-\s]', '_', filename).strip('._')
     return filename
 
 
@@ -346,6 +363,7 @@ if __name__ == '__main__':
 
         def __init__(self, environ):
             self.environ = environ
+            self.config = ConfigDict(None)
 
         @DictProperty('environ', 'minim.app', read_only=False)
         def cookie(self):
@@ -362,14 +380,9 @@ if __name__ == '__main__':
             print('haha')
             return 'bar1'
 
-        # def _cookie(self):
-        #     """test"""
-        #     return 'fight'
-        # tmp = DictProperty('environ', key='minim.app', read_only=False)
-        # cookie = tmp(_cookie)
+    mypath = '哈哈.jpg'
+    print(secure_filename(mypath))
 
-    foo = Foo({'method': 'GET', 'path': '/index'})
-    # print(foo.cookie)
-    # print(foo.environ)
-    print(foo.bar1)
-    print('2', foo.bar1)
+
+
+
