@@ -16,7 +16,7 @@ from json import dumps as json_dumps
 from io import StringIO
 
 from utils import make_list, ConfigDict
-from http_constants import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
+from http_utils import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
     RESPONSE_STATUSES, HEADER_X_POWERED_BY
 
 # from session import Session

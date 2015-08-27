@@ -3,6 +3,7 @@ import threading
 import time
 import re
 import datetime
+import functools
 import random
 import base64
 from copy import deepcopy
@@ -324,4 +325,14 @@ class RedisStore(Store):
 
 class MemCachedStore(Store):
     pass
+
+
+# decorators
+# def login_required(fn):
+#     @functools.wraps(fn)
+#     def inner(*args, **kwargs):
+#         if session.get('logged_in'):
+#             return fn(*args, **kwargs)
+#         return redirect(url_for('login', next=request.path))
+#     return inner
 

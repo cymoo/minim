@@ -16,8 +16,8 @@ class BaseCache:
                     the cache never expires.
     """
 
-    def __init__(self, timeout=300):
-        self.timeout = timeout
+    def __init__(self, default_timeout=300):
+        self.default_timeout = default_timeout
 
     def get(self, key):
         """
@@ -164,7 +164,68 @@ class BaseCache:
 
 
 class MiniCache(BaseCache):
-    pass
+    """
+    Simple memory cache for single process environments. This class
+    exists mainly for the development server and is not 100% thread
+    safe. It tries to use as many atomic operations as possible and
+    no locks for simplicity but it could happen under heavy load that
+    keys are added multiple times.
+    """
+    def __init__(self, threshold=500, default_timeout=300):
+        super().__init__(default_timeout)
+        self._cache = {}
+        self.clear = self._cache.clear
+        self._threshold = threshold
+
+    def _prune(self):
+        if len(self._cache) > self._threshold:
+            now = time()
+            to_remove = []
+            for idx, (key, (expires, _)) in enumerate(self._cache.items()):
+                if (expires != 0 and expires <= now) or idx % 3 == 0:
+                    to_remove.append(key)
+            for key in to_remove:
+                self._cache.pop(key)
+
+    def _get_expiration(self, timeout):
+        if timeout is None:
+            timeout = self.default_timeout
+        if timeout > 0:
+            timeout = time() + timeout
+        return timeout
+
+    def get(self, key):
+        try:
+            expires, value = self._cache[key]
+            if expires == 0 or expires > time():
+                return pickle.loads(value)
+        except (KeyError, pickle.PickleError):
+            return None
+
+    def set(self, key, value, timeout=None):
+        expires = self._get_expiration(timeout)
+        self._prune()
+        self._cache[key] = (expires, pickle.dumps(value, pickle.HIGHEST_PROTOCOL))
+        return True
+
+    def add(self, key, value, timeout=None):
+        expires = self._get_expiration(timeout)
+        self._prune()
+        item = (expires, pickle.dumps(value, pickle.HIGHEST_PROTOCOL))
+        if key in self._cache:
+            return False
+        self._cache.setdefault(key, item)
+        return True
+
+    def delete(self, key):
+        return self._cache.pop(key) is not None
+
+    def has(self, key):
+        try:
+            expires, value = self._cache[key]
+            return expires == 0 or expires > time()
+        except KeyError:
+            return False
 
 
 class FileSystemCache(BaseCache):
@@ -177,3 +238,9 @@ class MemcachedCache(BaseCache):
 
 class RedisCache(BaseCache):
     pass
+
+if __name__ == '__main__':
+    cache = MiniCache()
+    d = {'name': '醉默'}
+    cache.set('people', d)
+    print(cache.get('people'))

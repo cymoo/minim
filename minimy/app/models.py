@@ -1,5 +1,5 @@
 
-from peewee import *
+from orm import *
 
 db = SqliteDatabase('people.db')
 
