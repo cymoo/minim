@@ -1,3 +1,10 @@
+"""
+minim.orm
+
+...
+
+"""
+
 import datetime
 import decimal
 import hashlib

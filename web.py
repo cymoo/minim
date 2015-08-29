@@ -6,179 +6,45 @@ import threading
 import re
 import cgi
 import mimetypes
-import urllib.parse
+from urllib.parse import parse_qs, quote, unquote
+from tempfile import TemporaryFile
 import logging
 from http.cookies import SimpleCookie
 import time
 from datetime import timedelta, date, datetime
 from json import dumps as json_dumps
+from json import loads as json_loads
 
-from io import StringIO
+from io import StringIO, BytesIO
 
-from utils import make_list, ConfigDict
+from utils import make_list, DictProperty,\
+    safe_bytes, safe_str, FileStorage
+from structures import ConfigDict, FormsDict, WSGIHeaderDict
 from http_utils import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
-    RESPONSE_STATUSES, HEADER_X_POWERED_BY
+    RESPONSE_STATUSES, HEADER_X_POWERED_BY, HttpError, not_found, not_allowed
 
 # from session import Session
 
-
-# Dict object:
-class Dict(dict):
-    def __init__(self, names=(), values=(), **kw):
-        # super(Dict, self).__init__(**kw)
-        super().__init__(**kw)
-        for k, v in zip(names, values):
-            self[k] = v
-
-    def __getattr__(self, key):
-        try:
-            return self[key]
-        except KeyError:
-            raise AttributeError(r"'Dict' object has no attribute '%s'" % key)
-
-    def __setattr__(self, key, value):
-        self[key] = value
-
-    def __delattr__(self, key):
-        try:
-            del self[key]
-        except KeyError:
-            raise AttributeError
-
-
-class HttpError(Exception):
-    """
-    HttpError that defines http error code.
-    """
-    def __init__(self, code, msg=''):
-        """
-        Init an HttpError with response code.
-        """
-        super(HttpError, self).__init__()
-        self.status = '%d %s' % (code, RESPONSE_STATUSES[code])
-        self.msg = msg
-
-    def header(self, name, value):
-        if not hasattr(self, '_headers'):
-            self._headers = [HEADER_X_POWERED_BY]
-        self._headers.append((name, value))
-
-    @property
-    def headers(self):
-        if hasattr(self, '_headers'):
-            return self._headers
-        return []
-
-    def __str__(self):
-        return self.status + ': ' + self.msg if self.msg else self.status
-
-    __repr__ = __str__
-
-
-class RedirectError(HttpError):
-    """
-    RedirectError that defines http redirect code.
-    """
-    def __init__(self, code, location):
-        """
-        Init an HttpError with response code.
-        """
-        super(RedirectError, self).__init__(code)
-        self.location = location
-
-    def __str__(self):
-        return '%s, %s' % (self.status, self.location)
-
-    __repr__ = __str__
-
-
-def bad_request():
-    """
-    Send a bad request response.
-    """
-    return HttpError(400)
-
-
-def unauthorized():
-    """
-    Send an unauthorized response.
-    """
-    return HttpError(401)
-
-
-def forbidden():
-    """
-    Send a forbidden response.
-    """
-    return HttpError(403)
-
-
-def not_found():
-    """
-    Send a not found response.
-    """
-    return HttpError(404)
-
-
-def not_allowed():
-    """
-    Send a method not allowed response.
-    """
-    return HttpError(405)
-
-
-def conflict():
-    """
-    Send a conflict response.
-    """
-    return HttpError(409)
-
-
-def internal_error():
-    """
-    Send an internal error response.
-    """
-    return HttpError(500)
-
-
-def found(location):
-    """
-    Do temporary redirect.
-    """
-    return RedirectError(302, location)
-
-
-def see_other(location):
-    """
-    Do temporary redirect.
-    """
-    return RedirectError(303, location)
-
-
-def _quote(s):
-    """
-    Url quote as str.
-    """
-    return urllib.parse.quote(s)
-
-
-def _unquote(s):
-    """
-    Url unquote as unicode.
-    """
-    return urllib.parse.unquote(s)
-
-
-def _to_bytes(s):
-    if isinstance(s, str):
-        return s.encode('utf-8')
-    if isinstance(s, bytes):
-        return s
+__all__ = [
+    'Request',
+    'Response',
+    'Router',
+    'Route',
+    'Minim'
+]
 
 
 class Request(threading.local):
+    """
+    The request object contains the information transmitted by the client (web browser).
+    which is created with the WSGI environ.
+
+    Request objects are **read only**.
+    """
 
     # __slots__ = ('_environ',)
+
+    MAX_MEM_FILE = 102400
 
     def bind(self, environ=None):
         # super().__init__()
@@ -200,95 +66,502 @@ class Request(threading.local):
 
     @property
     def query_string(self):
-        return self._environ.get('QUERY_STRING')
+        return self._environ.get('QUERY_STRING', '')
 
     @property
     def content_type(self):
         return self._environ.get('CONTENT_TYPE', '').lower()
 
     @property
-    def input_length(self):
+    def is_chunked(self):
+        """
+        True if Chunked transfer encoding was.
+        see ** https://en.wikipedia.org/wiki/Chunked_transfer_encoding
+            http://www.tuicool.com/articles/IBrUZj **
+        for a preview of what 'transfer_encoding' is.
+        :return:
+        """
+        return 'chunked' in self._environ.get('HTTP_TRANSFER_ENCODING', '').lower()
+
+    @property
+    def content_length(self):
+        """
+        The request body length as an integer. The client is responsible to
+        set this header. Otherwise, the real length of the body is unknown
+        and -1 is returned. In this case, :attr:'body' will be empty.
+
+        :return:
+        """
+        return int(self._environ.get('CONTENT_LENGTH') or -1)
+
+    @DictProperty('environ', 'minim.request.params')
+    def params(self):
+        """
+        A :class:'FormsDict' with the combined values of :attr:'query' and
+        :attr:'forms'. File uploads are stored in :attr:'files'.
+
+        :return:
+        """
+        params = FormsDict()
+        for key, value in self.query.items():
+            params[key] = value
+        for key, value in self.forms.items():
+            params[key] = value
+
+        return params
+
+    @DictProperty('environ', 'minim.request.json')
+    def json(self):
+        """
+        If the "Content-Type" header is "application/json", this property holds
+        the parsed content of the request body. Only requests smaller than :attr:
+        'MAX_MEM_FILE' are processed to avoid memory exhaustion.
+        :return:
+        """
+        ctype = self._environ.get('CONTENT_TYPE', '').lower().split(';')[0]
+
+        if ctype == 'application/json':
+            body_string = self._get_body_string()
+            if not body_string:
+                return None
+            return json_loads(body_string)
+        return None
+
+    @DictProperty('environ', 'minim.request.forms')
+    def forms(self):
+        """
+        Form values parsed from an "url-encoded" or "multipart/form-data" encoded POST
+        or PUT request body.
+        The result is returned as a :class:'FormsDict'. All keys and values are string.
+        File uploads are stored separately in :attr:'files'.
+
+        :return:
+        """
+        forms = FormsDict()
+        for name, item in self.POST.items():
+            if not isinstance(item, FileStorage):
+                forms[name] = item
+        return forms
+
+    @DictProperty('environ', 'minim.request.files')
+    def files(self):
+        """
+        File uploads parsed from "multipart/form-data" encoded POST or PUT request
+        body.
+
+        :return: Instances of :class:'FileStorage'.
+        """
+        files = FormsDict()
+        for name, item in self.POST.items():
+            if isinstance(item, FileStorage):
+                files[name] = item
+        return files
+
+    def _iter_body(self, read_func, buffer_size):
+        """
+
+        :param read_func:
+        :param buffer_size:
+        :return:
+        """
+        max_read = max(0, self.content_length)
+        while max_read:
+            segment = read_func(min(max_read, buffer_size))
+            if not segment:
+                break
+            yield segment
+            # should be removed?
+            max_read -= len(segment)
+
+    @staticmethod
+    def _iter_chunked(read_func, buffer_size):
+        """
+
+        :param read_func:
+        :param buffer_size:
+        :return:
+        """
+        http_400_error = HttpError(400, 'Error while parsing chunked transfer body.')
+        rn, sem, bs = safe_bytes('\r\n'), safe_bytes(';'), safe_bytes('')
+        while True:
+            header = read_func(1)
+            while header[-2:] != rn:
+                c = read_func(1)
+                header += c
+                if not c:
+                    raise http_400_error
+                if len(header) > buffer_size:
+                    raise http_400_error
+            size, _, _ = header.partition(sem)
+            try:
+                max_read = int(safe_str(size.strip()), 16)
+            except ValueError:
+                raise http_400_error
+            if max_read == 0:
+                break
+
+            buffer = bs
+            while max_read > 0:
+                if not buffer:
+                    buffer = read_func(min(max_read, buffer_size))
+
+                segment, buffer = buffer[:max_read], buffer[max_read:]
+                if not segment:
+                    raise http_400_error
+                yield segment
+
+                max_read -= len(segment)
+
+            if read_func(2) != rn:
+                raise http_400_error
+
+    @DictProperty('environ', 'minim.request.body')
+    def _body(self):
         try:
-            return max(0, int(self._environ.get('CONTENT_LENGTH', '0')))
-        except ValueError:
-            return 0
+            read_func = self._environ['wsgi.input'].read
+        except KeyError:
+            self._environ['wsgi.input'] = BytesIO()
+            return self._environ['wsgi.input']
+        body_iter = self._iter_chunked if self.is_chunked else self._iter_body
+
+        body, body_size, is_tmp_file = BytesIO(), 0, False
+        for segment in body_iter(read_func, self.MAX_MEM_FILE):
+            body.write(segment)
+            body_size += len(segment)
+
+            if not is_tmp_file and body_size > self.MAX_MEM_FILE:
+                body, tmp = TemporaryFile(), body
+                body.write(tmp.getvalue())
+                del tmp
+                is_tmp_file = True
+
+        self._environ['wsgi.input'] = body
+        body.seek(0)
+        return body
+
+    @property
+    def body(self):
+        """
+        The HTTP request body as a seek-able file-like object.
+        Depending on :attr:'MEX_MEM_FILE', this is either a temporary file or
+        a :class:'io.BytesIO' instance. Accessing this property for the first
+        time reads and replaces the "wsgi.input" environ variable.
+        Subsequent accesses just do a 'seek(0)' on the file object.
+
+        :return:
+        """
+        self._body.seek(0)
+        return self._body
+
+    def _get_body_string(self):
+        """
+        Read body until content-length or MAX_MEM_FILE into a string.
+        Raise HTTPError(413) on requests that are too large.
+        """
+        length = self.content_length
+        # I don't think the following is right...
+        if length > self.MAX_MEM_FILE:
+            raise HttpError(413, 'Request entity too large')
+        if length < 0:
+            length = self.MAX_MEM_FILE + 1
+        data = self.body.read(length)
+
+        if len(data) > self.MAX_MEM_FILE:
+            raise HttpError(413, 'Request entity too large')
+
+        return data
 
     # um, what is PEP8? Is it delicious?
-    @property
+    @DictProperty('environ', 'minim.request.get')
     def GET(self):
-        raw_dict = urllib.parse.parse_qs(self.query_string, keep_blank_values=True)
-        self._GET = Dict()
-        for key, value in raw_dict.items():
-            if len(value) == 1:
-                self._GET[key] = value[0]
-            else:
-                self._GET[key] = value
-        return self._GET
+        """
+        The :attr:'query_string' parsed into a :class:'FormsDict'.
+        These values are sometimes called "URL arguments" or "GET parameters".
 
+        :return:
+        """
+        get = FormsDict()
+        pairs = parse_qs(self.query_string, keep_blank_values=True)
+        for key, value in pairs:
+            get[key] = value
+        return get
+
+    # An alias for :attr:'GET'
     query = GET
 
-    @property
+    @DictProperty('environ', 'minim.request.post')
     def POST(self):
-        raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
-        self._POST = Dict()
-        for key in raw_data:
-            if isinstance(raw_data[key], list):
-                self._POST[key] = [v.value for v in raw_data[key]]
-            elif raw_data[key].filename:
-                self._POST[key] = raw_data[key]
-            else:
-                self._POST[key] = raw_data[key].value
-        return self._POST
+        """
+        The values of :attr:'forms' and :attr:'files' combined into a single
+        :class:'FormsDict'. Values are either strings (form values) or
+        instances of :class:'cgi.FieldStorage' (file uploads).
 
+        Default form content_type is "application/x-www-form-urlencoded".
+
+        :return:
+        """
+        # raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
+        # self._POST = Dict()
+        # for key in raw_data:
+        #     if isinstance(raw_data[key], list):
+        #         self._POST[key] = [v.value for v in raw_data[key]]
+        #     elif raw_data[key].filename:
+        #         self._POST[key] = raw_data[key]
+        #     else:
+        #         self._POST[key] = raw_data[key].value
+        # return self._POST
+
+        post = FormsDict()
+        if not self.content_type.startswith('multipart/'):
+            # Bottle decode it using 'latin1', why?
+            pairs = parse_qs(safe_str(self._get_body_string()))
+            for key, value in pairs:
+                post[key] = value
+            return post
+
+        safe_env = {'QUERY_STRING': ''}
+        for key in {'REQUEST_METHOD', 'CONTENT_TYPE', 'CONTENT_LENGTH'}:
+            if key in self._environ:
+                safe_env[key] = self.environ[key]
+
+        args = dict(fp=self.body, environ=safe_env, keep_blank_values=True,
+                    encoding='utf-8')
+
+        data = cgi.FieldStorage(**args)
+
+        # http://bugs.python.org/issue18394
+        self['_cgi.FieldStorage'] = data
+        data = data.list or []
+
+        for item in data:
+            if item.filename:
+                post[item.name] = FileStorage(item.file, item.filename,
+                                              item.name)
+
+            else:
+                post[item.name] = item.value
+
+        return post
+
+    # An alias for :attr:'POST'
     post = POST
 
-    @property
+    @DictProperty('environ', 'minim.request.cookies')
     def cookies(self):
-        if self._COOKIES is None:
-                raw_dict = SimpleCookie(self._environ.get('HTTP_COOKIE', ''))
-                self._COOKIES = Dict()
-                for cookie in raw_dict.values():
-                    self._COOKIES[cookie.key] = _unquote(cookie.value)
-        return self._COOKIES
+        """
+        Cookies parsed into a :class:'FormsDict'.
 
-    @property
+        :return:
+        """
+        cookies = SimpleCookie(self._environ.get('HTTP_COOKIE', '')).values()
+
+        return FormsDict((c.key, c.value) for c in cookies)
+
+        # if self._COOKIES is None:
+        #         raw_dict = SimpleCookie(self._environ.get('HTTP_COOKIE', ''))
+        #         self._COOKIES = Dict()
+        #         for cookie in raw_dict.values():
+        #             self._COOKIES[cookie.key] = unquote(cookie.value)
+        # return self._COOKIES
+
+    def get_cookie(self, key, default=None):
+        """
+        The content of a cookie.
+
+        :param key:
+        :return:
+        """
+        return self.cookies.get(key) or default
+
+    @DictProperty('environ', 'minim.request.headers')
     def headers(self):
-        if self._HEADERS is None:
-            self._HEADERS = Dict()
-            for key, value in self._environ.items():
-                if key.startswith('HTTP_'):
-                     # convert 'HTTP_ACCEPT_ENCODING' to 'ACCEPT-ENCODING'
-                    self._HEADERS[key[5:].replace('_', '-').upper()] = value
-        return self._HEADERS
+        """
+        A :class:'WSGIHeaderDict' that provides case-insensitive access to
+        HTTP request headers.
+
+        :return:
+        """
+        return WSGIHeaderDict(self._environ)
+
+        # if self._HEADERS is None:
+        #     self._HEADERS = Dict()
+        #     for key, value in self._environ.items():
+        #         if key.startswith('HTTP_'):
+        #              # convert 'HTTP_ACCEPT_ENCODING' to 'ACCEPT-ENCODING'
+        #             self._HEADERS[key[5:].replace('_', '-').upper()] = value
+        # return self._HEADERS
+    def get_header(self, name):
+        """
+
+        :param name:
+        :return:
+        """
+        return self.headers.get(name, None)
 
     @property
-    def remote_addr(self):
-        return self._environ.get('REMOTE_ADDR', '0.0.0.0')
+    def client_addr(self):
+        """
+        Returns the effective client IP as a string.
+        If the "HTTP_X_FORWARDED_FOR" header exists in the WSGI environ, the attribute
+        returns the client IP address present in that header (e.g. if the header value
+        is '192.168.1.1, 192.168.1.2', the value will be '192.168.1.1'). If no "HTTP_
+        FORWARDED_FOR" header is present in the environ at all, this attribute will
+        return the value of the "REMOTE_ADDR" header. if the "REMOTE_ADDR" header is
+        unset, this attribute will return the value "0.0.0.0".
+
+        Warning:
+        It is possible for user agents to put someone else's IP or just any string in
+        "HTTP_X_FORWARDED_FOR" as it is a normal HTTP header. Forward proxies can provide
+        incorrect values (private IP address etc). You cannot "blindly" trust the result
+        of this method to provide you with valid data unless you're certain that "HTTP_
+        X_FORWARDED_FOR" has the correct values. The WSGI server must be behind a trusted
+        proxy for this to be true.
+        """
+        env = self._environ
+        xff = env.get('HTTP_X_FORWARDED_FOR')
+        if xff is not None:
+            addr = xff.split(',')[0].strip()
+        else:
+            addr = env.get('REMOTE_ADDR', '0.0.0.0')
+        return addr
 
     @property
-    def document_root(self):
-        return self._environ.get('DOCUMENT_ROOT', '')
+    def host_port(self):
+        """
+        The effective server port number as a string. if the "HTTP_HOST" header exists in
+        the WSGI environ, this attribute returns the port number present in that header.
+        If the "HTTP_HOST" header exists but contains no explicit port number: if the WSGI
+        url scheme is "https", this attribute returns "443"; if "http" then returns "80".
+        If no "HTTP_HOST" header is present in the environ, returns the value of the "SERVER_PORT"
+        header (which is guaranteed to be present).
+        """
+        env = self._environ
+        host = env.get('HTTP_HOST')
+        if host is not None:
+            if ':' in host:
+                port = host.split(':', 1)[1]
+            else:
+                url_scheme = env['wsgi.url_scheme']
+                if url_scheme == 'https':
+                    port = '443'
+                else:
+                    port = '80'
+        else:
+            port = env['SERVER_PORT']
+        return port
 
+    # @DictProperty('environ', 'minim.request.path', read_only=True)
     @property
-    def environ(self):
-        return self._environ
+    def path(self):
+        """
+        Requested path. This works a bit like the regular path info in
+        the WSGI environment, but always include a leading slash, even if
+        the URL root is accessed.
+        :return:
+        """
+        return unquote(self._environ.get('PATH_INFO', ''))
+
+    @DictProperty('environ', 'minim.request.full_path', read_only=True)
+    def full_path(self):
+        """
+        Requested path including the query string.
+        :return:
+        """
+
+    @DictProperty('environ', 'minim.request.script_root', read_only=True)
+    def script_root(self):
+        """
+        The root path of the script without the trailing slash.
+        :return:
+        """
+
+    @DictProperty('environ', 'minim.request.url', read_only=True)
+    def url(self):
+        """
+        The reconstructed current URL as IRI.
+        :return:
+        """
+
+    @DictProperty('environ', 'minim.request.base_url', read_only=True)
+    def base_url(self):
+        """
+        Like :attr: 'url' but without the query string.
+        :return:
+        """
+
+    @DictProperty('environ', 'minim.request.url_root', read_only=True)
+    def url_root(self):
+        """
+        The full URL root (with hostname), this is the application root as IRI.
+        :return:
+        """
+
+    @DictProperty('environ', 'minim.request.host_url', read_only=True)
+    def host_url(self):
+        """
+        Just the host with scheme as IRI.
+        :return:
+        """
+
+    # @property
+    # def document_root(self):
+    #     return self._environ.get('DOCUMENT_ROOT', '')
 
     @property
     def is_xhr(self):
         requested_with = self._environ.get('HTTP_X_REQUESTED_WITH', '')
         return requested_with.lower() == 'xmlhttprequest'
 
-    @property
-    def is_ajax(self):
-        return self.is_xhr
+    # An alias for :attr:'is_xhr'
+    is_ajax = is_xhr
 
-    @property
-    def path(self):
-        return _unquote(self._environ.get('PATH_INFO', ''))
+    # @property
+    # def path(self):
+    #     return unquote(self._environ.get('PATH_INFO', ''))
 
     @property
     def host(self):
         return self._environ.get('HTTP_HOST', '')
+
+    def copy(self):
+        """
+        Return a new :class:'Request' with a shallow :attr:'environ' copy.
+        """
+        return Request(self._environ.copy())
+
+    def get(self, name, default=None):
+        """
+        Return the environ item.
+        """
+        return self._environ.get(name, default)
+
+    def keys(self):
+        return self._environ.keys()
+
+    def __getitem__(self, key):
+        return self._environ[key]
+
+    def __setitem__(self, key, value):
+        raise KeyError('The request object is read-only.')
+
+    def __delitem__(self, key):
+        self[key] = ''
+        del self._environ[key]
+
+    # def __getattr__(self, name):
+    #     pass
+    #
+    # def __setattr__(self, key, value):
+    #     pass
+
+    def __iter__(self):
+        return iter(self._environ)
+
+    def __len__(self):
+        return len(self._environ)
+
+    def __repr__(self):
+        return '<%s: %s %s>' % (self.__class__.__name__, self.method, self.url)
 
 
 class Response(threading.local):
@@ -379,32 +652,6 @@ class Response(threading.local):
         self.set_cookie(key, '', **kw)
 
 
-def redirect(url, code=None):
-    if not code:
-        code = 303 if request.environ.get('SERVER_PROTOCOL') == 'HTTP/1.1' else 302
-    response.status = code
-    response.set_header('Location', url)
-    return response
-
-
-def send_file(directory, filename):
-    filepath = os.path.join(directory, filename)
-    if not os.path.isfile(filepath):
-        raise not_found()
-    mime_type = mimetypes.guess_type(filepath)[0] or 'application/octet-stream'
-    response.set_header('content-type', mime_type)
-
-    def _static_file_generator(path):
-        block_size = 8192
-        with open(path, 'rb') as f:
-            block = f.read(block_size)
-            while block:
-                yield block
-                block = f.read(block_size)
-
-    return _static_file_generator(filepath)
-
-
 class Router:
     def __init__(self):
         self.static_routes = {
@@ -471,6 +718,7 @@ class Router:
     def match(self):
         method = request.method
         url = request.path
+        print(url)
         static_func = self.static_routes[method].get(url)
         if static_func is not None:
             return static_func()
@@ -647,10 +895,6 @@ def render(template_name, **kwargs):
     full_path = os.path.join(app.template_path, app.template_folder, template_name)
     tpl = MiniTemplate(full_path)
     return tpl.render(**kwargs)
-
-
-class FileUpload:
-    pass
 
 
 class AppStack(list):

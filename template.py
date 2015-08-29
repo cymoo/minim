@@ -1,3 +1,10 @@
+"""
+minim.template
+~~~~~~~~~~~~~~
+
+A very cute and easy-to-use template language.
+
+"""
 import re
 import math
 import ast
@@ -5,13 +12,30 @@ import os
 from random import choice
 
 __all__ = [
-    'TemplateError', 'TemplateFilterError', 'TemplateSyntaxError', 'TemplateContextError',
-    '_Fragment', '_Node', '_ScopeNode', '_Root',
-    '_Extends', '_Block', '_Include',
-    '_Text', '_Variable', '_Comment',
-    '_Escape', '_Set', '_For', '_Empty',
-    '_If', '_Elif', '_Else', '_Raw',
-    'Compiler', 'MiniTemplate'
+    'TemplateError',
+    'TemplateFilterError',
+    'TemplateSyntaxError',
+    'TemplateContextError',
+    '_Fragment',
+    '_Node',
+    '_ScopeNode',
+    '_Root',
+    '_Extends',
+    '_Block',
+    '_Include',
+    '_Text',
+    '_Variable',
+    '_Comment',
+    '_Escape',
+    '_Set',
+    '_For',
+    '_Empty',
+    '_If',
+    '_Elif',
+    '_Else',
+    '_Raw',
+    'Compiler',
+    'MiniTemplate'
 ]
 
 VAR_FRAGMENT = 0

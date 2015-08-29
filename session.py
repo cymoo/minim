@@ -11,12 +11,15 @@ import pickle
 import shelve
 from hashlib import sha1
 
-from web import HttpError, Dict, request, response
+from web import HttpError, request, response
 
 
 __all__ = [
-    'Session', 'SessionExpired',
-    'Store', 'DiskStore', 'DBStore'
+    'Session',
+    'SessionExpired',
+    'Store',
+    'DiskStore',
+    'DBStore'
 ]
 
 ### config related ####
@@ -55,7 +58,8 @@ class Session(threading.local):
         self.store = store
         self._initializer = initializer
         self._last_clean_time = 0
-        self._data = Dict()
+        # self._data = Dict()
+        self._data = dict()
 
         # what is for?
         if app:

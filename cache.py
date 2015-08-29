@@ -1,3 +1,9 @@
+"""
+minim.cache
+
+...
+
+"""
 import os
 import re
 import errno
@@ -5,6 +11,14 @@ import tempfile
 from hashlib import md5
 from time import time
 import pickle
+
+__all__ = [
+    'BaseCache',
+    'MiniCache',
+    'FilesystemCache',
+    'MemcachedCache',
+    'RedisCache'
+]
 
 
 class BaseCache:

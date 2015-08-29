@@ -1,3 +1,6 @@
+import os
+import mimetypes
+
 # all known response statues:
 
 RESPONSE_STATUSES = {
@@ -109,3 +112,138 @@ RESPONSE_HEADERS = (
 RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), RESPONSE_HEADERS), RESPONSE_HEADERS))
 
 HEADER_X_POWERED_BY = ('X-Powered-By', 'minim/0.1')
+
+
+class HttpError(Exception):
+    """
+    HttpError that defines http error code.
+    """
+    def __init__(self, code, msg=''):
+        """
+        Init an HttpError with response code.
+        """
+        super(HttpError, self).__init__()
+        self.status = '%d %s' % (code, RESPONSE_STATUSES[code])
+        self.msg = msg
+
+    def header(self, name, value):
+        if not hasattr(self, '_headers'):
+            self._headers = [HEADER_X_POWERED_BY]
+        self._headers.append((name, value))
+
+    @property
+    def headers(self):
+        if hasattr(self, '_headers'):
+            return self._headers
+        return []
+
+    def __str__(self):
+        return self.status + ': ' + self.msg if self.msg else self.status
+
+    __repr__ = __str__
+
+
+class RedirectError(HttpError):
+    """
+    RedirectError that defines http redirect code.
+    """
+    def __init__(self, code, location):
+        """
+        Init an HttpError with response code.
+        """
+        super(RedirectError, self).__init__(code)
+        self.location = location
+
+    def __str__(self):
+        return '%s, %s' % (self.status, self.location)
+
+    __repr__ = __str__
+
+
+def bad_request():
+    """
+    Send a bad request response.
+    """
+    return HttpError(400)
+
+
+def unauthorized():
+    """
+    Send an unauthorized response.
+    """
+    return HttpError(401)
+
+
+def forbidden():
+    """
+    Send a forbidden response.
+    """
+    return HttpError(403)
+
+
+def not_found():
+    """
+    Send a not found response.
+    """
+    return HttpError(404)
+
+
+def not_allowed():
+    """
+    Send a method not allowed response.
+    """
+    return HttpError(405)
+
+
+def conflict():
+    """
+    Send a conflict response.
+    """
+    return HttpError(409)
+
+
+def internal_error():
+    """
+    Send an internal error response.
+    """
+    return HttpError(500)
+
+
+def found(location):
+    """
+    Do temporary redirect.
+    """
+    return RedirectError(302, location)
+
+
+def see_other(location):
+    """
+    Do temporary redirect.
+    """
+    return RedirectError(303, location)
+
+
+def redirect(url, code=None):
+    if not code:
+        code = 303 if request.environ.get('SERVER_PROTOCOL') == 'HTTP/1.1' else 302
+    response.status = code
+    response.set_header('Location', url)
+    return response
+
+
+def send_file(directory, filename):
+    filepath = os.path.join(directory, filename)
+    if not os.path.isfile(filepath):
+        raise not_found()
+    mime_type = mimetypes.guess_type(filepath)[0] or 'application/octet-stream'
+    response.set_header('content-type', mime_type)
+
+    def _static_file_generator(path):
+        block_size = 8192
+        with open(path, 'rb') as f:
+            block = f.read(block_size)
+            while block:
+                yield block
+                block = f.read(block_size)
+
+    return _static_file_generator(filepath)
