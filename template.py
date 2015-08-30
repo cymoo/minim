@@ -225,7 +225,8 @@ class _Root(_Node):
             _extends = children.pop(0)
             self.ins.block_dicts.append({})
             self.ins.has_ancestor = True
-        elif isinstance(children[0], _Text) and isinstance(children[1], _Extends):
+        elif len(children) > 1 and isinstance(children[0], _Text)\
+                and isinstance(children[1], _Extends):
             _extends = children.pop(1)
             self.ins.block_dicts.append({})
             self.ins.has_ancestor = True

@@ -1,4 +1,4 @@
-from web import Minim, render, request, response, g
+from web import Minim, render, request
 from template import MiniTemplate
 from models import Person
 
@@ -16,7 +16,7 @@ def favicon():
 def index():
     request.foo = 'bar'
     persons = Person.select()
-    print(request.foo)
+    # print(request.foo)
     welcome = 'Keep calm and carry on!'
     motto = ['醒醒我们回家了', '世界是我的表象', '向死而生', '凡人所有的我都有']
     return render('index.html', motto=motto, welcome=welcome, persons=persons)
@@ -24,7 +24,17 @@ def index():
 
 @app.get('/home')
 def home():
-    print(request.foo)
+    # print(request.foo)
     return 'do not go gentle into that good night.'
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        print(request.POST.to_dict())
+        print(request.forms.to_dict())
+        print(request.params.to_dict())
+        return request.params.hobbits
+    return render('login.html')
 
 app.run()

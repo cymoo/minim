@@ -43,6 +43,7 @@ class DictProperty:
         if obj is None:
             return self
         key, storage = self.key, getattr(obj, self.attr)
+        # print(storage)
         if key not in storage:
             storage[key] = self.func(obj)
         return storage[key]
@@ -135,7 +136,6 @@ class MultiDict(dict):
     """
     def __init__(self, mapping=None):
         if isinstance(mapping, MultiDict):
-            # dict.__init__(self, ((k, l[:])for k, l in mapping.lists()))
             super().__init__((k, l[:])for k, l in mapping.lists())
         elif isinstance(mapping, dict):
             tmp = {}
@@ -145,13 +145,11 @@ class MultiDict(dict):
                 else:
                     value = [value]
                 tmp[key] = value
-            # dict.__init__(self, tmp)
             super().__init__(tmp)
         else:
             tmp = {}
             for key, value in mapping or ():
                 tmp.setdefault(key, []).append(value)
-            # dict.__init__(self, tmp)
             super().__init__(tmp)
 
     def __getstate__(self):
@@ -159,7 +157,7 @@ class MultiDict(dict):
 
     def __setstate__(self, value):
         dict.clear(self)
-        dict.update(self, value)
+        super().update(value)
 
     def __getitem__(self, key):
         """
@@ -167,14 +165,14 @@ class MultiDict(dict):
         raises KeyError if not found.
         """
         if key in self:
-            return dict.__getitem__(self, key)[0]
-        raise KeyError('key: %s does not exists.')
+            return super().__getitem__(key)[0]
+        raise KeyError('key: %s does not exists.' % key)
 
     def __setitem__(self, key, value):
         """
         Like :meth:'add' but removes an existing key first.
         """
-        dict.__setitem__(self, key, [value])
+        super().__setitem__(key, [value])
 
     def get(self, key, default=None, type=None):
         """
@@ -202,7 +200,7 @@ class MultiDict(dict):
         """
         Adds a new value for the key.
         """
-        dict.setdefault(self, key, []).append(value)
+        super().setdefault(key, []).append(value)
 
     def getlist(self, key, type=None):
         """
@@ -217,7 +215,7 @@ class MultiDict(dict):
         :return: a :class: 'list' of all the values for the key.
         """
         try:
-            values = dict.__getitem__(self, key)
+            values = super().__getitem__(key)
         except KeyError:
             return []
         if type is None:
@@ -239,7 +237,7 @@ class MultiDict(dict):
         :param new_list: An iterable with the new values for the key. Old values are
                         removed first.
         """
-        dict.__setitem__(self, key, list(new_list))
+        super().__setitem__(key, list(new_list))
 
     def setdefault(self, key, default=None):
         """
@@ -271,9 +269,9 @@ class MultiDict(dict):
         """
         if key not in self:
             default_list = list(default_list or ())
-            dict.__setitem__(self, key, default_list)
+            super().__setitem__(key, default_list)
         else:
-            default_list = dict.__getitem__(self, key)
+            default_list = super().__getitem__(key)
         return default_list
 
     def items(self, multi=True):
@@ -284,7 +282,7 @@ class MultiDict(dict):
                       for each value of each key. Otherwise it will only contains
                       pairs for the first value of each key.
         """
-        for key, values in dict.items(self):
+        for key, values in super().items():
             if multi:
                 for value in values:
                     yield key, value
@@ -296,24 +294,24 @@ class MultiDict(dict):
         Return a list of "(key, values)" pairs where values is the list of all
         values associated with the key.
         """
-        for key, values in dict.items(self):
+        for key, values in super().items():
             yield key, list(values)
 
     def keys(self):
-        return dict.keys(self)
+        return super().keys()
 
     __iter__ = keys
 
     def values(self):
         """Returns an iterator for the first value on every key's value list."""
-        for values in dict.values(self):
+        for values in super().values():
             yield values[0]
 
     def listvalues(self):
         """
         Return an iterator of all values associated with a key.
         """
-        return dict.values(self)
+        return super().values()
 
     def copy(self):
         """Return a shallow copy of this object."""
@@ -323,7 +321,7 @@ class MultiDict(dict):
         """Return a deep copy of this object."""
         return self.__class__(deepcopy(self.to_dict(flat=False), memo))
 
-    def to_dict(self, flat=True):
+    def to_dict(self, flat=False):
         """
         Return the contents as regular dict. If 'flat' is 'True' the returned
         dict will only have the first present, if 'flat' is 'False' all values
@@ -343,7 +341,6 @@ class MultiDict(dict):
         Update() extends rather than replaces existing key list.
         """
         for key, value in _iter_multi_items(other_dict):
-            # MultiDict.add(self, key, value)
             self.add(key, value)
 
     def pop(self, key, default=None):
@@ -356,7 +353,7 @@ class MultiDict(dict):
         """
 
         try:
-            return dict.pop(self, key)[0]
+            return super().pop(key)[0]
         except KeyError:
             if default is not None:
                 return default
@@ -367,7 +364,7 @@ class MultiDict(dict):
         Pop an item from the dict.
         """
         try:
-            item = dict.popitem(self)
+            item = super().popitem()
             return item[0], item[1][0]
         except KeyError:
             raise KeyError('The dict is empty.')
@@ -377,14 +374,14 @@ class MultiDict(dict):
         Pop the list for a key from the dict. If the key is not in the dict
         an empty list is returned.
         """
-        return dict.pop(self, key, [])
+        return super().pop(key, [])
 
     def popitemlist(self):
         """
         Pop a "(key, list)" tuple from the dict.
         """
         try:
-            return dict.popitem(self)
+            return super().popitem()
         except KeyError:
             raise KeyError('The dict is empty.')
 
@@ -405,10 +402,10 @@ class FormsDict(MultiDict):
     unmodified data as native strings, this container also supports
     attribute-like access to its values.
     """
-    # should do some works about encoding & decoding here?
 
     def __getattr__(self, name):
-        return self.getlist(name)
+        value = self.getlist(name)
+        return value if len(value) > 1 else value[0]
 
 
 class HeaderDict(MultiDict):
@@ -662,3 +659,10 @@ class FileStorage:
             self.filename,
             self.content_type
         )
+
+# pairs = {'uname': ['sexmaker'], 'hobbits': ['girl', 'game', 'book'], 'sex': ['female'], 'motto': ['世界是我的表象']}
+# # m = MultiDict(pairs)
+# m = FormsDict(pairs)
+#
+# print(m.getlist('hobbits'))
+# print(m.hobbits)

@@ -17,9 +17,9 @@ from json import loads as json_loads
 
 from io import StringIO, BytesIO
 
-from utils import make_list, DictProperty,\
-    safe_bytes, safe_str, FileStorage
-from structures import ConfigDict, FormsDict, WSGIHeaderDict
+from utils import make_list, safe_bytes, safe_str
+from structures import ConfigDict, FormsDict, WSGIHeaderDict,\
+    DictProperty, FileStorage
 from http_utils import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
     RESPONSE_STATUSES, HEADER_X_POWERED_BY, HttpError, not_found, not_allowed
 
@@ -48,7 +48,7 @@ class Request(threading.local):
 
     def bind(self, environ=None):
         # super().__init__()
-        self._environ = {} if environ is None else environ
+        self.environ = {} if environ is None else environ
         # self._GET = None
         # self._POST = None
         # self._COOKIES = None
@@ -62,15 +62,15 @@ class Request(threading.local):
 
     @property
     def method(self):
-        return self._environ.get('REQUEST_METHOD', 'GET').upper()
+        return self.environ.get('REQUEST_METHOD', 'GET').upper()
 
     @property
     def query_string(self):
-        return self._environ.get('QUERY_STRING', '')
+        return self.environ.get('QUERY_STRING', '')
 
     @property
     def content_type(self):
-        return self._environ.get('CONTENT_TYPE', '').lower()
+        return self.environ.get('CONTENT_TYPE', '').lower()
 
     @property
     def is_chunked(self):
@@ -81,7 +81,7 @@ class Request(threading.local):
         for a preview of what 'transfer_encoding' is.
         :return:
         """
-        return 'chunked' in self._environ.get('HTTP_TRANSFER_ENCODING', '').lower()
+        return 'chunked' in self.environ.get('HTTP_TRANSFER_ENCODING', '').lower()
 
     @property
     def content_length(self):
@@ -92,7 +92,7 @@ class Request(threading.local):
 
         :return:
         """
-        return int(self._environ.get('CONTENT_LENGTH') or -1)
+        return int(self.environ.get('CONTENT_LENGTH') or -1)
 
     @DictProperty('environ', 'minim.request.params')
     def params(self):
@@ -104,9 +104,9 @@ class Request(threading.local):
         """
         params = FormsDict()
         for key, value in self.query.items():
-            params[key] = value
+            params.add(key, value)
         for key, value in self.forms.items():
-            params[key] = value
+            params.add(key, value)
 
         return params
 
@@ -118,7 +118,7 @@ class Request(threading.local):
         'MAX_MEM_FILE' are processed to avoid memory exhaustion.
         :return:
         """
-        ctype = self._environ.get('CONTENT_TYPE', '').lower().split(';')[0]
+        ctype = self.environ.get('CONTENT_TYPE', '').lower().split(';')[0]
 
         if ctype == 'application/json':
             body_string = self._get_body_string()
@@ -140,7 +140,7 @@ class Request(threading.local):
         forms = FormsDict()
         for name, item in self.POST.items():
             if not isinstance(item, FileStorage):
-                forms[name] = item
+                forms.add(name, item)
         return forms
 
     @DictProperty('environ', 'minim.request.files')
@@ -152,7 +152,7 @@ class Request(threading.local):
         :return: Instances of :class:'FileStorage'.
         """
         files = FormsDict()
-        for name, item in self.POST.items():
+        for name, item in self.POST.lists():
             if isinstance(item, FileStorage):
                 files[name] = item
         return files
@@ -218,10 +218,10 @@ class Request(threading.local):
     @DictProperty('environ', 'minim.request.body')
     def _body(self):
         try:
-            read_func = self._environ['wsgi.input'].read
+            read_func = self.environ['wsgi.input'].read
         except KeyError:
-            self._environ['wsgi.input'] = BytesIO()
-            return self._environ['wsgi.input']
+            self.environ['wsgi.input'] = BytesIO()
+            return self.environ['wsgi.input']
         body_iter = self._iter_chunked if self.is_chunked else self._iter_body
 
         body, body_size, is_tmp_file = BytesIO(), 0, False
@@ -235,7 +235,7 @@ class Request(threading.local):
                 del tmp
                 is_tmp_file = True
 
-        self._environ['wsgi.input'] = body
+        self.environ['wsgi.input'] = body
         body.seek(0)
         return body
 
@@ -282,8 +282,8 @@ class Request(threading.local):
         """
         get = FormsDict()
         pairs = parse_qs(self.query_string, keep_blank_values=True)
-        for key, value in pairs:
-            get[key] = value
+        for key, value in pairs.items():
+            get.setlist(key, value)
         return get
 
     # An alias for :attr:'GET'
@@ -315,13 +315,13 @@ class Request(threading.local):
         if not self.content_type.startswith('multipart/'):
             # Bottle decode it using 'latin1', why?
             pairs = parse_qs(safe_str(self._get_body_string()))
-            for key, value in pairs:
-                post[key] = value
+            for key, value in pairs.items():
+                post.setlist(key, value)
             return post
 
         safe_env = {'QUERY_STRING': ''}
         for key in {'REQUEST_METHOD', 'CONTENT_TYPE', 'CONTENT_LENGTH'}:
-            if key in self._environ:
+            if key in self.environ:
                 safe_env[key] = self.environ[key]
 
         args = dict(fp=self.body, environ=safe_env, keep_blank_values=True,
@@ -335,11 +335,13 @@ class Request(threading.local):
 
         for item in data:
             if item.filename:
-                post[item.name] = FileStorage(item.file, item.filename,
-                                              item.name)
+                # post[item.name] = FileStorage(item.file, item.filename, item.name)
+                file = FileStorage(item.file, item.filename, item.name)
+                post.add(item.name, file)
 
             else:
-                post[item.name] = item.value
+                # post[item.name] = item.value
+                post.add(item.name, item.value)
 
         return post
 
@@ -353,7 +355,7 @@ class Request(threading.local):
 
         :return:
         """
-        cookies = SimpleCookie(self._environ.get('HTTP_COOKIE', '')).values()
+        cookies = SimpleCookie(self.environ.get('HTTP_COOKIE', '')).values()
 
         return FormsDict((c.key, c.value) for c in cookies)
 
@@ -381,7 +383,7 @@ class Request(threading.local):
 
         :return:
         """
-        return WSGIHeaderDict(self._environ)
+        return WSGIHeaderDict(self.environ)
 
         # if self._HEADERS is None:
         #     self._HEADERS = Dict()
@@ -417,7 +419,7 @@ class Request(threading.local):
         X_FORWARDED_FOR" has the correct values. The WSGI server must be behind a trusted
         proxy for this to be true.
         """
-        env = self._environ
+        env = self.environ
         xff = env.get('HTTP_X_FORWARDED_FOR')
         if xff is not None:
             addr = xff.split(',')[0].strip()
@@ -435,7 +437,7 @@ class Request(threading.local):
         If no "HTTP_HOST" header is present in the environ, returns the value of the "SERVER_PORT"
         header (which is guaranteed to be present).
         """
-        env = self._environ
+        env = self.environ
         host = env.get('HTTP_HOST')
         if host is not None:
             if ':' in host:
@@ -459,7 +461,7 @@ class Request(threading.local):
         the URL root is accessed.
         :return:
         """
-        return unquote(self._environ.get('PATH_INFO', ''))
+        return unquote(self.environ.get('PATH_INFO', ''))
 
     @DictProperty('environ', 'minim.request.full_path', read_only=True)
     def full_path(self):
@@ -509,7 +511,7 @@ class Request(threading.local):
 
     @property
     def is_xhr(self):
-        requested_with = self._environ.get('HTTP_X_REQUESTED_WITH', '')
+        requested_with = self.environ.get('HTTP_X_REQUESTED_WITH', '')
         return requested_with.lower() == 'xmlhttprequest'
 
     # An alias for :attr:'is_xhr'
@@ -521,32 +523,32 @@ class Request(threading.local):
 
     @property
     def host(self):
-        return self._environ.get('HTTP_HOST', '')
+        return self.environ.get('HTTP_HOST', '')
 
     def copy(self):
         """
         Return a new :class:'Request' with a shallow :attr:'environ' copy.
         """
-        return Request(self._environ.copy())
+        return Request(self.environ.copy())
 
     def get(self, name, default=None):
         """
         Return the environ item.
         """
-        return self._environ.get(name, default)
+        return self.environ.get(name, default)
 
     def keys(self):
-        return self._environ.keys()
+        return self.environ.keys()
 
     def __getitem__(self, key):
-        return self._environ[key]
+        return self.environ[key]
 
-    def __setitem__(self, key, value):
-        raise KeyError('The request object is read-only.')
+    # def __setitem__(self, key, value):
+    #     raise KeyError('The request object is read-only.')
 
     def __delitem__(self, key):
         self[key] = ''
-        del self._environ[key]
+        del self.environ[key]
 
     # def __getattr__(self, name):
     #     pass
@@ -555,10 +557,10 @@ class Request(threading.local):
     #     pass
 
     def __iter__(self):
-        return iter(self._environ)
+        return iter(self.environ)
 
     def __len__(self):
-        return len(self._environ)
+        return len(self.environ)
 
     def __repr__(self):
         return '<%s: %s %s>' % (self.__class__.__name__, self.method, self.url)
@@ -718,7 +720,6 @@ class Router:
     def match(self):
         method = request.method
         url = request.path
-        print(url)
         static_func = self.static_routes[method].get(url)
         if static_func is not None:
             return static_func()
@@ -871,7 +872,7 @@ class Minim:
 
             return out
         finally:
-            del request._environ
+            del request.environ
             response._cookies = None
             response._status = '200 OK'
             response._headers = {'CONTENT-TYPE': 'text/html; charset=UTF-8'}
