@@ -1,3 +1,10 @@
+"""
+minim.session
+~~~~~~~~~~~~~
+
+...
+
+"""
 import os
 import threading
 import time

@@ -1,4 +1,4 @@
-from web import Minim, render, request
+from web import Minim, render, request, response
 from template import MiniTemplate
 from models import Person
 
@@ -19,6 +19,7 @@ def index():
     # print(request.foo)
     welcome = 'Keep calm and carry on!'
     motto = ['醒醒我们回家了', '世界是我的表象', '向死而生', '凡人所有的我都有']
+    print(response.headers)
     return render('index.html', motto=motto, welcome=welcome, persons=persons)
 
 

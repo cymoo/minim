@@ -1,3 +1,10 @@
+"""
+minim.http_utils
+~~~~~~~~~~~~~~~~
+
+
+"""
+
 import os
 import mimetypes
 
@@ -247,3 +254,22 @@ def send_file(directory, filename):
                 block = f.read(block_size)
 
     return _static_file_generator(filepath)
+
+
+def environ_from_url(path):
+    """Used for test.
+
+    :return
+    """
+    pass
+
+
+def environ_add_POST(env, data, content_type=None):
+    """Used for test.
+
+    :param env:
+    :param data:
+    :param content_type:
+    :return:
+    """
+    pass

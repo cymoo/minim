@@ -1,11 +1,15 @@
-#coding:utf-8
+"""
+minim.web
+~~~~~~~~~
 
+...
+
+"""
 import os
 import sys
 import threading
 import re
 import cgi
-import mimetypes
 from urllib.parse import parse_qs, quote, unquote
 from tempfile import TemporaryFile
 import logging
@@ -15,11 +19,11 @@ from datetime import timedelta, date, datetime
 from json import dumps as json_dumps
 from json import loads as json_loads
 
-from io import StringIO, BytesIO
+from io import BytesIO
 
 from utils import make_list, safe_bytes, safe_str
 from structures import ConfigDict, FormsDict, WSGIHeaderDict,\
-    DictProperty, FileStorage
+    environ_property, FileStorage
 from http_utils import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
     RESPONSE_STATUSES, HEADER_X_POWERED_BY, HttpError, not_found, not_allowed
 
@@ -46,19 +50,20 @@ class Request(threading.local):
 
     MAX_MEM_FILE = 102400
 
-    def bind(self, environ=None):
-        # super().__init__()
-        self.environ = {} if environ is None else environ
-        # self._GET = None
-        # self._POST = None
-        # self._COOKIES = None
-        # self._HEADERS = None
-        # self.path = self._environ.get('PATH_INFO', '/').strip()
-        # if not self.path.startswith('/'):
-        #     self.path += '/'
+    #: the maximum content length. This is forwarded to the form data
+    #: parsing function. When set and the :attr:'form' or :attr:'files'
+    #: attribute is accessed and the parsing fails because more than the
+    #: specified value is transmitted a 413 error is raised.
+    max_content_length = None
 
-    # def bind(self, environ):
-    #     self._environ = environ
+    #: the maximum form field size. This is forwarded to the form data
+    #: parsing function. When set and the :attr:'form' and attr:'files'
+    #: attribute is accessed and the data in memory for post data is longer
+    #: than specified value a 413 error is raised.
+    max_form_memory_size = None
+
+    def bind(self, environ=None):
+        self.environ = {} if environ is None else environ
 
     @property
     def method(self):
@@ -94,7 +99,7 @@ class Request(threading.local):
         """
         return int(self.environ.get('CONTENT_LENGTH') or -1)
 
-    @DictProperty('environ', 'minim.request.params')
+    @environ_property('environ', 'minim.request.params')
     def params(self):
         """
         A :class:'FormsDict' with the combined values of :attr:'query' and
@@ -110,7 +115,7 @@ class Request(threading.local):
 
         return params
 
-    @DictProperty('environ', 'minim.request.json')
+    @environ_property('environ', 'minim.request.json')
     def json(self):
         """
         If the "Content-Type" header is "application/json", this property holds
@@ -127,7 +132,7 @@ class Request(threading.local):
             return json_loads(body_string)
         return None
 
-    @DictProperty('environ', 'minim.request.forms')
+    @environ_property('environ', 'minim.request.forms')
     def forms(self):
         """
         Form values parsed from an "url-encoded" or "multipart/form-data" encoded POST
@@ -143,7 +148,7 @@ class Request(threading.local):
                 forms.add(name, item)
         return forms
 
-    @DictProperty('environ', 'minim.request.files')
+    @environ_property('environ', 'minim.request.files')
     def files(self):
         """
         File uploads parsed from "multipart/form-data" encoded POST or PUT request
@@ -215,7 +220,7 @@ class Request(threading.local):
             if read_func(2) != rn:
                 raise http_400_error
 
-    @DictProperty('environ', 'minim.request.body')
+    @environ_property('environ', 'minim.request.body')
     def _body(self):
         try:
             read_func = self.environ['wsgi.input'].read
@@ -272,7 +277,7 @@ class Request(threading.local):
         return data
 
     # um, what is PEP8? Is it delicious?
-    @DictProperty('environ', 'minim.request.get')
+    @environ_property('environ', 'minim.request.get')
     def GET(self):
         """
         The :attr:'query_string' parsed into a :class:'FormsDict'.
@@ -289,7 +294,7 @@ class Request(threading.local):
     # An alias for :attr:'GET'
     query = GET
 
-    @DictProperty('environ', 'minim.request.post')
+    @environ_property('environ', 'minim.request.post')
     def POST(self):
         """
         The values of :attr:'forms' and :attr:'files' combined into a single
@@ -348,7 +353,7 @@ class Request(threading.local):
     # An alias for :attr:'POST'
     post = POST
 
-    @DictProperty('environ', 'minim.request.cookies')
+    @environ_property('environ', 'minim.request.cookies')
     def cookies(self):
         """
         Cookies parsed into a :class:'FormsDict'.
@@ -375,7 +380,7 @@ class Request(threading.local):
         """
         return self.cookies.get(key) or default
 
-    @DictProperty('environ', 'minim.request.headers')
+    @environ_property('environ', 'minim.request.headers')
     def headers(self):
         """
         A :class:'WSGIHeaderDict' that provides case-insensitive access to
@@ -452,7 +457,6 @@ class Request(threading.local):
             port = env['SERVER_PORT']
         return port
 
-    # @DictProperty('environ', 'minim.request.path', read_only=True)
     @property
     def path(self):
         """
@@ -463,47 +467,50 @@ class Request(threading.local):
         """
         return unquote(self.environ.get('PATH_INFO', ''))
 
-    @DictProperty('environ', 'minim.request.full_path', read_only=True)
+    @environ_property('environ', 'minim.request.full_path')
     def full_path(self):
         """
         Requested path including the query string.
         :return:
         """
 
-    @DictProperty('environ', 'minim.request.script_root', read_only=True)
+    @environ_property('environ', 'minim.request.script_root')
     def script_root(self):
         """
         The root path of the script without the trailing slash.
         :return:
         """
 
-    @DictProperty('environ', 'minim.request.url', read_only=True)
+    @environ_property('environ', 'minim.request.url')
     def url(self):
         """
         The reconstructed current URL as IRI.
         :return:
         """
 
-    @DictProperty('environ', 'minim.request.base_url', read_only=True)
+    @environ_property('environ', 'minim.request.base_url')
     def base_url(self):
         """
         Like :attr: 'url' but without the query string.
         :return:
         """
 
-    @DictProperty('environ', 'minim.request.url_root', read_only=True)
+    @environ_property('environ', 'minim.request.url_root')
     def url_root(self):
         """
         The full URL root (with hostname), this is the application root as IRI.
         :return:
         """
 
-    @DictProperty('environ', 'minim.request.host_url', read_only=True)
+    @environ_property('environ', 'minim.request.host_url')
     def host_url(self):
         """
         Just the host with scheme as IRI.
         :return:
         """
+    @property
+    def host(self):
+        return self.environ.get('HTTP_HOST', '')
 
     # @property
     # def document_root(self):
@@ -517,13 +524,30 @@ class Request(threading.local):
     # An alias for :attr:'is_xhr'
     is_ajax = is_xhr
 
-    # @property
-    # def path(self):
-    #     return unquote(self._environ.get('PATH_INFO', ''))
+    @property
+    def is_secure(self):
+        """'True' if the request is secure."""
+        return self.environ.get('wsgi.url_scheme', '') == 'https'
 
     @property
-    def host(self):
-        return self.environ.get('HTTP_HOST', '')
+    def is_multithread(self):
+        """'True' if the application is served."""
+        return self.environ.get('wsgi.multithread')
+
+    @property
+    def is_multiprocess(self):
+        """'True' if the application is served by a WSGI server that
+        spawns multiple processed.
+        """
+        return self.environ.get('wsgi.multiprocess')
+
+    @property
+    def is_run_once(self):
+        """'True' if the application will be executed only once in a
+        process lifetime. This is the case for CGI for example, but
+        it's not guaranteed that execution only happens one time.
+        """
+        return self.environ.get('wsgi.run_once')
 
     def copy(self):
         """
@@ -567,7 +591,10 @@ class Request(threading.local):
 
 
 class Response(threading.local):
-    default_content_type = 'text/html; charset=UTF-8'
+    # default_content_type = 'text/html; charset=UTF-8'
+    charst = 'utf-8'
+    default_status = 200
+    default_mimetype = 'text/html'
 
     def __init__(self, status=None, headers=None, **more_headers):
         super().__init__()
@@ -575,27 +602,85 @@ class Response(threading.local):
         self._status = '200 OK'
         self._headers = {'CONTENT-TYPE': 'text/html; charset=UTF-8'}
 
-    @property
-    def status_code(self):
-        return int(self._status[:3])
+    def copy(self, cls=None):
+        pass
+
+    def __iter__(self):
+        pass
+
+    def close(self):
+        pass
+
+
+
+    # @property
+    # def status_code(self):
+    #     return int(self._status[:3])
+    #
+    # @property
+    # def status_line(self):
+    #     return self._status
+    #
+    # def _get_status(self):
+    #     return None
+    #
+    # def _set_status(self, value):
+    #     if isinstance(value, int):
+    #         if 100 <= value <= 999:
+    #             status_str = RESPONSE_STATUSES.get(value, '')
+    #             if status_str:
+    #                 self._status = '%d %s' % (value, status_str)
+    #             else:
+    #                 self._status = str(value)
+    #         else:
+    #             raise ValueError('Bad response code: %d.' % value)
+    #     else:
+    #         raise TypeError('Bad type of response code.')
+    #
+    # status = property(
+    #     _get_status, _set_status, None,
+    #     """
+    #     A writeable property to change the HTTP response status. it accepts
+    #     either a numeric code (100-999) or a string with a custom reason
+    #     phrase (e.g. "404 who grabs my microphone?"). Both :data:'status_line'
+    #     and :data:'status_code' are updated accordingly. The return value is
+    #     always a status string.
+    #     """
+    # )
+
+    def _get_status_code(self):
+        return None
+
+    def _set_status_code(self, code):
+        pass
+
+    status_code = property(_get_status_code, _set_status_code,
+                           doc='The HTTP status code as number')
+
+    del _get_status_code, _set_status_code
+
+    def _get_status(self):
+        return None
+
+    def _set_status(self, value):
+        pass
+
+    status = property(_get_status, _set_status, doc='The HTTP status code')
+
+    del _get_status, _set_status
+
+    def calculate_content_length(self):
+        pass
 
     @property
-    def status(self):
-        return self._status
+    def is_streamed(self):
+        return False
 
-    @status.setter
-    def status(self, value):
-        if isinstance(value, int):
-            if 100 <= value <= 999:
-                status_str = RESPONSE_STATUSES.get(value, '')
-                if status_str:
-                    self._status = '%d %s' % (value, status_str)
-                else:
-                    self._status = str(value)
-            else:
-                raise ValueError('Bad response code: %d.' % value)
-        else:
-            raise TypeError('Bad type of response code.')
+
+
+
+
+
 
     @property
     def headers(self):
@@ -625,6 +710,16 @@ class Response(threading.local):
             key = name
         self._headers[key] = value
 
+    def add_header(self, name, value):
+        pass
+
+    def iter_headers(self):
+        pass
+
+    @property
+    def charset(self, default='utf-8'):
+        return None
+
     # the options are max_age, expires, path, domain, httponly, secure
     def set_cookie(self, name, value, **options):
         if not self._cookies:
@@ -652,6 +747,9 @@ class Response(threading.local):
         kw['max_age'] = -1
         kw['expires'] = 0
         self.set_cookie(key, '', **kw)
+
+    def __repr__(self):
+        pass
 
 
 class Router:

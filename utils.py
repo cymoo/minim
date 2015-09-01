@@ -1,4 +1,10 @@
-# Common Utilities
+"""
+minim.utils
+~~~~~~~~~~~
+
+...
+
+"""
 import sys
 import os
 import re
