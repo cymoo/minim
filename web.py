@@ -10,9 +10,8 @@ import sys
 import threading
 import re
 import cgi
-from urllib.parse import parse_qs, quote, unquote
+from urllib.parse import parse_qs, quote as url_quote, unquote as url_unquote
 from tempfile import TemporaryFile
-import logging
 from http.cookies import SimpleCookie
 import time
 from datetime import timedelta, date, datetime
@@ -22,10 +21,8 @@ from json import loads as json_loads
 from io import BytesIO
 
 from utils import make_list, safe_bytes, safe_str
-from structures import ConfigDict, FormsDict, WSGIHeaderDict,\
-    environ_property, FileStorage
-from http_utils import RESPONSE_HEADER_DICT, RESPONSE_HEADERS,\
-    RESPONSE_STATUSES, HEADER_X_POWERED_BY, HttpError, not_found, not_allowed
+from structures import ConfigDict, FormsDict, HeadersDict, environ_property, FileStorage
+from web_utils import RESPONSE_STATUSES, HttpError, not_found, not_allowed
 
 # from session import Session
 
@@ -46,21 +43,21 @@ class Request(threading.local):
     Request objects are **read only**.
     """
 
-    # __slots__ = ('_environ',)
+    # __slots__ = ('environ',)
 
-    MAX_MEM_FILE = 102400
+    # MAX_MEM_FILE = 102400
 
     #: the maximum content length. This is forwarded to the form data
     #: parsing function. When set and the :attr:'form' or :attr:'files'
     #: attribute is accessed and the parsing fails because more than the
     #: specified value is transmitted a 413 error is raised.
-    max_content_length = None
+    MAX_CONTENT_LENGTH = 10240000
 
     #: the maximum form field size. This is forwarded to the form data
     #: parsing function. When set and the :attr:'form' and attr:'files'
     #: attribute is accessed and the data in memory for post data is longer
     #: than specified value a 413 error is raised.
-    max_form_memory_size = None
+    MAX_FORM_MEMORY_SIZE = 1024*100
 
     def bind(self, environ=None):
         self.environ = {} if environ is None else environ
@@ -104,8 +101,6 @@ class Request(threading.local):
         """
         A :class:'FormsDict' with the combined values of :attr:'query' and
         :attr:'forms'. File uploads are stored in :attr:'files'.
-
-        :return:
         """
         params = FormsDict()
         for key, value in self.query.items():
@@ -175,7 +170,6 @@ class Request(threading.local):
             if not segment:
                 break
             yield segment
-            # should be removed?
             max_read -= len(segment)
 
     @staticmethod
@@ -230,15 +224,17 @@ class Request(threading.local):
         body_iter = self._iter_chunked if self.is_chunked else self._iter_body
 
         body, body_size, is_tmp_file = BytesIO(), 0, False
-        for segment in body_iter(read_func, self.MAX_MEM_FILE):
+        for segment in body_iter(read_func, self.MAX_FORM_MEMORY_SIZE):
             body.write(segment)
+            print('body-value', body.getvalue())
             body_size += len(segment)
+            print('body-size', body_size)
 
-            if not is_tmp_file and body_size > self.MAX_MEM_FILE:
-                body, tmp = TemporaryFile(), body
-                body.write(tmp.getvalue())
-                del tmp
-                is_tmp_file = True
+            # if not is_tmp_file and body_size > self.MAX_FORM_MEMORY_SIZE:
+            #     body, tmp = TemporaryFile(), body
+            #     body.write(tmp.getvalue())
+            #     del tmp
+            #     is_tmp_file = True
 
         self.environ['wsgi.input'] = body
         body.seek(0)
@@ -264,15 +260,15 @@ class Request(threading.local):
         Raise HTTPError(413) on requests that are too large.
         """
         length = self.content_length
-        # I don't think the following is right...
-        if length > self.MAX_MEM_FILE:
+
+        if length > self.MAX_CONTENT_LENGTH:
             raise HttpError(413, 'Request entity too large')
         if length < 0:
             length = self.MAX_MEM_FILE + 1
         data = self.body.read(length)
 
-        if len(data) > self.MAX_MEM_FILE:
-            raise HttpError(413, 'Request entity too large')
+        # if len(data) > self.MAX_CONTENT_LENGTH:
+        #     raise HttpError(413, 'Request entity too large')
 
         return data
 
@@ -318,7 +314,7 @@ class Request(threading.local):
 
         post = FormsDict()
         if not self.content_type.startswith('multipart/'):
-            # Bottle decode it using 'latin1', why?
+            # print(self._get_body_string())
             pairs = parse_qs(safe_str(self._get_body_string()))
             for key, value in pairs.items():
                 post.setlist(key, value)
@@ -329,19 +325,32 @@ class Request(threading.local):
             if key in self.environ:
                 safe_env[key] = self.environ[key]
 
-        args = dict(fp=self.body, environ=safe_env, keep_blank_values=True,
-                    encoding='utf-8')
+        # args = dict(fp=self.body, environ=safe_env, keep_blank_values=True,
+        #             encoding='utf-8')
 
-        data = cgi.FieldStorage(**args)
+        # print('wsgi-input', self.environ['wsgi.input'].read())
 
+        # print('content-type', self.content_type)
+
+        data = cgi.FieldStorage(fp=self.body, environ=safe_env, keep_blank_values=True)
+
+        print('data-headers', data.headers)
         # http://bugs.python.org/issue18394
-        self['_cgi.FieldStorage'] = data
+        # self['_cgi.FieldStorage'] = data
         data = data.list or []
 
         for item in data:
             if item.filename:
+                # print('filename', item.filename)
                 # post[item.name] = FileStorage(item.file, item.filename, item.name)
                 file = FileStorage(item.file, item.filename, item.name)
+                print('item.file', item.file)
+                print('item.filename', item.filename)
+                print('item.name', item.name)
+                print('item.headers', item.headers)
+                print('item.content-type', item.type)
+                print('item.type_options', item.type_options)
+                print('request.content-type', self.content_type)
                 post.add(item.name, file)
 
             else:
@@ -352,6 +361,52 @@ class Request(threading.local):
 
     # An alias for :attr:'POST'
     post = POST
+
+    def accept_mimetypes(self):
+        pass
+
+    def accept_charsets(self):
+        pass
+
+    def accept_encoding(self):
+        pass
+
+    def accept_language(self):
+        pass
+
+    def cache_control(self):
+        pass
+
+    def if_match(self):
+        pass
+
+    def if_none_match(self):
+        pass
+
+    def is_modified_since(self):
+        pass
+
+    def if_unmodified_since(self):
+        pass
+
+    def if_range(self):
+        pass
+
+    def range(self):
+        pass
+
+    def user_agent(self):
+        pass
+
+    def authorization(self):
+        pass
+
+
+    ####
+    ####
+
+
+
 
     @environ_property('environ', 'minim.request.cookies')
     def cookies(self):
@@ -380,30 +435,30 @@ class Request(threading.local):
         """
         return self.cookies.get(key) or default
 
-    @environ_property('environ', 'minim.request.headers')
-    def headers(self):
-        """
-        A :class:'WSGIHeaderDict' that provides case-insensitive access to
-        HTTP request headers.
+    # @property
+    # def wsgi_headers(self):
+    #     """
+    #     Raw WSGI environ.
+    #     """
+    #     return self.environ
 
+    @property
+    def host(self):
+        """
+        Returns the real host. First checks the 'X-Forwarded-Host' header, then the normal
+        'Host' header, and finally the 'SERVER_NAME' environment variable.
         :return:
         """
-        return WSGIHeaderDict(self.environ)
-
-        # if self._HEADERS is None:
-        #     self._HEADERS = Dict()
-        #     for key, value in self._environ.items():
-        #         if key.startswith('HTTP_'):
-        #              # convert 'HTTP_ACCEPT_ENCODING' to 'ACCEPT-ENCODING'
-        #             self._HEADERS[key[5:].replace('_', '-').upper()] = value
-        # return self._HEADERS
-    def get_header(self, name):
-        """
-
-        :param name:
-        :return:
-        """
-        return self.headers.get(name, None)
+        if 'HTTP_X_FORWARDED_HOST' in self.environ:
+            rv = self.environ['HTTP_X_FORWARDED_HOST'].split(',', 1)[0].strip()
+        elif 'HTTP_HOST' in self.environ:
+            rv = self.environ['HTTP_HOST']
+        else:
+            rv = self.environ['SERVER_NAME']
+            if (self.environ['wsgi.url_scheme'], self.environ['SERVER_PORT']) not \
+                    in (('https', '443'), ('http', '80')):
+                rv += ':' + self.environ['SERVER_PORT']
+        return rv
 
     @property
     def client_addr(self):
@@ -415,14 +470,6 @@ class Request(threading.local):
         FORWARDED_FOR" header is present in the environ at all, this attribute will
         return the value of the "REMOTE_ADDR" header. if the "REMOTE_ADDR" header is
         unset, this attribute will return the value "0.0.0.0".
-
-        Warning:
-        It is possible for user agents to put someone else's IP or just any string in
-        "HTTP_X_FORWARDED_FOR" as it is a normal HTTP header. Forward proxies can provide
-        incorrect values (private IP address etc). You cannot "blindly" trust the result
-        of this method to provide you with valid data unless you're certain that "HTTP_
-        X_FORWARDED_FOR" has the correct values. The WSGI server must be behind a trusted
-        proxy for this to be true.
         """
         env = self.environ
         xff = env.get('HTTP_X_FORWARDED_FOR')
@@ -465,7 +512,7 @@ class Request(threading.local):
         the URL root is accessed.
         :return:
         """
-        return unquote(self.environ.get('PATH_INFO', ''))
+        return url_unquote(self.environ.get('PATH_INFO', ''))
 
     @environ_property('environ', 'minim.request.full_path')
     def full_path(self):
@@ -473,6 +520,8 @@ class Request(threading.local):
         Requested path including the query string.
         :return:
         """
+        qs = self.query_string
+        return self.path + '?' + qs if qs else self.path
 
     @environ_property('environ', 'minim.request.script_root')
     def script_root(self):
@@ -480,6 +529,32 @@ class Request(threading.local):
         The root path of the script without the trailing slash.
         :return:
         """
+        raw_path = self.environ.get('SCRIPT_NAME') or ''
+        return raw_path.rstrip('/')
+
+    def _get_current_url(self, environ, root_only=False, strip_qs=False,
+                         host_only=False):
+        """
+        A handy helper function that recreates the full URL for the current request.
+        :param environ: the WSGI environment.
+        :param root_only: set to 'True' if you only want the root URL.
+        :param strip_qs: set to 'True' if you don't want the query string.
+        :param host_only: set to 'True' if the host url should be returned.
+        :return:
+        """
+        tmp = [environ['wsgi.url_scheme'], '://', self.host]
+        cat = tmp.append
+        if host_only:
+            return ''.join(tmp) + '/'
+        cat(url_quote(environ.get('SCRIPT_NAME', '')).rstrip('/'))
+        cat('/')
+        if not root_only:
+            cat(environ.get('PATH_INFO', '').lstrip('/'))
+            if not strip_qs:
+                qs = self.query_string
+                if qs:
+                    cat('?' + qs)
+        return ''.join(tmp)
 
     @environ_property('environ', 'minim.request.url')
     def url(self):
@@ -487,6 +562,7 @@ class Request(threading.local):
         The reconstructed current URL as IRI.
         :return:
         """
+        return self._get_current_url(self.environ)
 
     @environ_property('environ', 'minim.request.base_url')
     def base_url(self):
@@ -494,6 +570,7 @@ class Request(threading.local):
         Like :attr: 'url' but without the query string.
         :return:
         """
+        return self._get_current_url(self.environ, strip_qs=True)
 
     @environ_property('environ', 'minim.request.url_root')
     def url_root(self):
@@ -501,6 +578,7 @@ class Request(threading.local):
         The full URL root (with hostname), this is the application root as IRI.
         :return:
         """
+        return self._get_current_url(self.environ, root_only=True)
 
     @environ_property('environ', 'minim.request.host_url')
     def host_url(self):
@@ -508,13 +586,7 @@ class Request(threading.local):
         Just the host with scheme as IRI.
         :return:
         """
-    @property
-    def host(self):
-        return self.environ.get('HTTP_HOST', '')
-
-    # @property
-    # def document_root(self):
-    #     return self._environ.get('DOCUMENT_ROOT', '')
+        return self._get_current_url(self.environ, host_only=True)
 
     @property
     def is_xhr(self):
@@ -570,15 +642,9 @@ class Request(threading.local):
     # def __setitem__(self, key, value):
     #     raise KeyError('The request object is read-only.')
 
-    def __delitem__(self, key):
-        self[key] = ''
-        del self.environ[key]
-
-    # def __getattr__(self, name):
-    #     pass
-    #
-    # def __setattr__(self, key, value):
-    #     pass
+    # def __delitem__(self, key):
+    #     self[key] = ''
+    #     del self._environ[key]
 
     def __iter__(self):
         return iter(self.environ)
@@ -591,16 +657,29 @@ class Request(threading.local):
 
 
 class Response(threading.local):
-    # default_content_type = 'text/html; charset=UTF-8'
-    charst = 'utf-8'
-    default_status = 200
-    default_mimetype = 'text/html'
+    default_status_code = 200
+    default_content_type = 'text/html; charset=utf-8'
 
-    def __init__(self, status=None, headers=None, **more_headers):
+    def __init__(self, headers=None, status_code=None, content_type=None):
         super().__init__()
-        self._cookies = None
-        self._status = '200 OK'
-        self._headers = {'CONTENT-TYPE': 'text/html; charset=UTF-8'}
+        if isinstance(headers, HeadersDict):
+            self._headers = headers
+        elif not headers:
+            self._headers = HeadersDict()
+        else:
+            self._headers = HeadersDict(headers)
+
+        if status_code is None:
+            status_code = self.default_status_code
+        if isinstance(status_code, int):
+            self.status_code = status_code
+        else:
+            self.status = status_code
+
+        if content_type is None:
+            self._headers['Content-Type'] = self.default_content_type
+        else:
+            self._headers['Content-Type'] = content_type
 
     def copy(self, cls=None):
         pass
@@ -611,48 +690,15 @@ class Response(threading.local):
     def close(self):
         pass
 
-
-
-    # @property
-    # def status_code(self):
-    #     return int(self._status[:3])
-    #
-    # @property
-    # def status_line(self):
-    #     return self._status
-    #
-    # def _get_status(self):
-    #     return None
-    #
-    # def _set_status(self, value):
-    #     if isinstance(value, int):
-    #         if 100 <= value <= 999:
-    #             status_str = RESPONSE_STATUSES.get(value, '')
-    #             if status_str:
-    #                 self._status = '%d %s' % (value, status_str)
-    #             else:
-    #                 self._status = str(value)
-    #         else:
-    #             raise ValueError('Bad response code: %d.' % value)
-    #     else:
-    #         raise TypeError('Bad type of response code.')
-    #
-    # status = property(
-    #     _get_status, _set_status, None,
-    #     """
-    #     A writeable property to change the HTTP response status. it accepts
-    #     either a numeric code (100-999) or a string with a custom reason
-    #     phrase (e.g. "404 who grabs my microphone?"). Both :data:'status_line'
-    #     and :data:'status_code' are updated accordingly. The return value is
-    #     always a status string.
-    #     """
-    # )
-
     def _get_status_code(self):
-        return None
+        return self._status_code
 
     def _set_status_code(self, code):
-        pass
+        self._status_code = code
+        try:
+            self._status = '%d %s' % (code, RESPONSE_STATUSES[code].upper())
+        except KeyError:
+            self._status = '%d UNKNOWN' % code
 
     status_code = property(_get_status_code, _set_status_code,
                            doc='The HTTP status code as number')
@@ -660,61 +706,44 @@ class Response(threading.local):
     del _get_status_code, _set_status_code
 
     def _get_status(self):
-        return None
+        return self._status
 
     def _set_status(self, value):
-        pass
+        self._status = value
+        try:
+            self._status_code = int(self._status.split(None, 1)[0])
+        except ValueError:
+            self._status_code = 0
+            self._status = '0 %s' % self._status
 
     status = property(_get_status, _set_status, doc='The HTTP status code')
 
     del _get_status, _set_status
 
-    def calculate_content_length(self):
-        pass
-
     @property
-    def is_streamed(self):
-        return False
+    def wsgi_headers(self):
+        return self._headers.to_wsgi_list()
 
+    def get_header(self, name, default):
+        return self._headers.get(name, default)
 
+    def set_header(self, name, value, **kw):
+        self._headers.set(name, value, **kw)
 
+    def set_default_header(self, name, default):
+        self._headers.setdefault(name, default)
 
+    def add_header(self, name, value, **kw):
+        self._headers.add(name, value, **kw)
 
+    def remove_header(self, name):
+        self._headers.remove(name)
 
-
-    @property
-    def headers(self):
-        l = [(RESPONSE_HEADER_DICT.get(k, k), v) for k, v in self._headers.items()]
-        if self._cookies is not None:
-            for v in self._cookies.values():
-                l.append(('Set-Cookie', v))
-        l.append(HEADER_X_POWERED_BY)
-        return l
-
-    def header(self, name):
-        key = name.upper()
-        if not key in RESPONSE_HEADER_DICT:
-            key = name
-        return self._headers.get(key)
-
-    def unset_header(self, name):
-        key = name.upper()
-        if not key in RESPONSE_HEADER_DICT:
-            key = name
-        if key in self._headers:
-            del self._headers[key]
-
-    def set_header(self, name, value):
-        key = name.upper()
-        if not key in RESPONSE_HEADER_DICT:
-            key = name
-        self._headers[key] = value
-
-    def add_header(self, name, value):
-        pass
+    def clear_headers(self):
+        self._headers.clear()
 
     def iter_headers(self):
-        pass
+        return iter(self._headers)
 
     @property
     def charset(self, default='utf-8'):
@@ -724,7 +753,6 @@ class Response(threading.local):
     def set_cookie(self, name, value, **options):
         if not self._cookies:
             self._cookies = SimpleCookie()
-
         if len(value) > 4096:
             raise ValueError('Cookie value too long.')
         self._cookies[name] = value
@@ -739,14 +767,49 @@ class Response(threading.local):
                 elif isinstance(v, (int, float)):
                     v = time.gmtime(v)
                 v = time.strftime('%a, %d %b %Y %H:%M:%S GMT', v)
-            # if k in ('secure', 'httponly') and not v:
-            #     continue
             self._cookies[name][k.replace('_', '-')] = v
 
     def delete_cookie(self, key, **kw):
         kw['max_age'] = -1
         kw['expires'] = 0
         self.set_cookie(key, '', **kw)
+
+    def cache_control(self):
+        pass
+
+    def make_conditiontional(self, request_or_environ):
+        pass
+
+    def add_etag(self):
+        pass
+
+    def set_etag(self):
+        pass
+
+    def freeze(self):
+        pass
+
+    def _get_content_range(self):
+        return None
+
+    def _set_content_range(self):
+        pass
+
+    content_range = property(_get_content_range, _set_content_range, doc="""""")
+
+    del _get_content_range, _set_content_range
+
+    def __contains__(self, name):
+        return name in self._headers
+
+    def __delitem__(self, name):
+        del self._headers[name]
+
+    def __getitem__(self, name):
+        return self._headers[name]
+
+    def __setitem__(self, name, value):
+        self._headers[name] = value
 
     def __repr__(self):
         pass
@@ -928,7 +991,7 @@ class Minim:
             request.bind(environ)
             # should not set that here, but something curious with the thread stuff; just for test
             response.set_header('content-type', 'text/html; charset=UTF-8')
-            response.status = 200
+            response.status_code = 200
             try:
                 if self._before_request_func is not None:
                     self._before_request_func()
@@ -966,14 +1029,11 @@ class Minim:
     def wsgi(self, environ, start_response):
         try:
             out = self._cast(self._handle(environ))
-            start_response(response.status, response.headers)
+            start_response(response.status, response.wsgi_headers)
 
             return out
         finally:
-            del request.environ
-            response._cookies = None
-            response._status = '200 OK'
-            response._headers = {'CONTENT-TYPE': 'text/html; charset=UTF-8'}
+            pass
 
     def __call__(self, environ, start_response):
         return self.wsgi(environ, start_response)

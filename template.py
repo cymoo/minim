@@ -474,8 +474,12 @@ class _For(_ScopeNode):
 
         items = eval(self.raw_expr, context, {})
 
-
-        loop_attr = {'length': len(items), 'index': 0, 'first': False, 'last': False}
+        loop_attr = {
+            'length': len(items),
+            'index': 0,
+            'first': False,
+            'last': False,
+        }
         loop = type('_Loop', (), loop_attr)
 
         main_branch, empty_branch = self.branches[0], self.branches[1]

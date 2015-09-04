@@ -21,7 +21,6 @@ __all__ = [
     'MultiDict',
     'FormsDict',
     'HeadersDict',
-    'WSGIHeaderDict',
     'ConfigDict',
 ]
 
@@ -299,7 +298,7 @@ class MultiDict(dict):
         """Return a shallow copy of this object."""
         return self.__class__(self)
 
-    def deepcopy(self, memo):
+    def deepcopy(self, memo=None):
         """Return a deep copy of this object."""
         return self.__class__(deepcopy(self.to_dict(flat=False), memo))
 
@@ -314,6 +313,7 @@ class MultiDict(dict):
                     value for each key.
         :return: a :class:'dict'.
         """
+
         if flat:
             return dict(self.items())
         return dict(self.lists())
@@ -393,7 +393,7 @@ class MultiDict(dict):
     def __copy__(self):
         return self.copy()
 
-    def __deepcopy(self, memo):
+    def __deepcopy(self, memo=None):
         return self.deepcopy(memo=memo)
 
     def __repr__(self):
@@ -607,12 +607,9 @@ class HeadersDict:
 
     @staticmethod
     def _options_header_vkw(header, options):
-        """The reverse function to :func:`parse_options_header`.
+        """
         :param header: the header to dump
         :param options: a dict of options to append.
-        >>> HeadersDict._options_header_vkw('text/html', {'charset':'utf-8'})
-        'text/html; charset=utf-8'
-
         """
         # Replace '_' in key to '-'
         options = dict((k.replace('_', '-'), v) for k, v in options.items())
@@ -629,17 +626,14 @@ class HeadersDict:
 
     def add(self, _key, _value, **kw):
         """Add a new header tuple to the list.
-        Keyword arguments can specify additional parameters for the header
-        value, with underscores converted to dashes::
-        >>> d = HeadersDict()
-        >>> d.add('Content-Type', 'text/plain')
-        >>> d.add('Content-Disposition', 'attachment', filename='foo.png')
 
+        Keyword arguments can specify additional parameters for the header
+        value, with underscores converted to dashes.
         """
         if kw:
             _value = self._options_header_vkw(_value, kw)
         self._validate_value(_value)
-        self._list.append((_key, _value))
+        self._list.append((_key.title(), _value))
 
     @staticmethod
     def _validate_value(value):
@@ -672,17 +666,17 @@ class HeadersDict:
             _value = self._options_header_vkw(_value, kw)
         self._validate_value(_value)
         if not self._list:
-            self._list.append((_key, _value))
+            self._list.append((_key.title(), _value))
             return
         list_iter = iter(self._list)
         ikey = _key.lower()
         for idx, (old_key, old_value) in enumerate(list_iter):
             if old_key.lower() == ikey:
                 # replace first appearance
-                self._list[idx] = (_key, _value)
+                self._list[idx] = (_key.title(), _value)
                 break
         else:
-            self._list.append((_key, _value))
+            self._list.append((_key.title(), _value))
             return
         self._list[idx + 1:] = [t for t in list_iter if t[0].lower() != ikey]
 
@@ -742,55 +736,6 @@ class HeadersDict:
         )
 
 
-class WSGIHeaderDict(dict):
-    """
-    This dict-like class wraps a WSGI environ dict and provides convenient
-    access to HTTP_* fields. Keys and values are native strings and keys are
-    case-insensitive.
-    """
-    cgi_keys = ('CONTENT_TYPE', 'CONTENT_LENGTH')
-
-    def __init__(self, environ):
-        super().__init__()
-        self.environ = environ
-
-    def _ekey(self, key):
-        """Translate header field name to CGI/WSGI environ key."""
-        key = key.repalce('-', '_').upper()
-        if key in self.cgi_keys:
-            return key
-        return 'HTTP_' + key
-
-    def raw(self, key, default):
-        """Return the header value."""
-        return self.environ.get(self._ekey(key), default)
-
-    def __getitem__(self, key):
-        return self.environ[self._ekey(key)]
-
-    def __setitem__(self, key, value):
-        raise TypeError('%s is read-only.' % self.__class__)
-
-    def __delitem__(self, key):
-        raise TypeError('%s is read-only.' % self.__class__)
-
-    def __iter__(self):
-        for key in self.environ:
-            if key[:5] == 'HTTP_':
-                yield key[5:].replace('_', '-').title()
-            elif key in self.cgi_keys:
-                yield key.repalce('_', '-').title()
-
-    def keys(self):
-        return [k for k in self.keys()]
-
-    def __len__(self):
-        return len(self.keys())
-
-    def __contains__(self, key):
-        return self._ekey(key) in self.environ
-
-
 class ConfigDict(dict):
 
     def __init__(self, root_path, defaults=None):
@@ -824,7 +769,7 @@ class ConfigDict(dict):
             raise IOError("Unable to load JSON file (%s)." % filename)
         return self.load_from_dict(obj)
 
-    def load_from_config(self, filename):
+    def load_from_ini(self, filename):
         """
         Load values from an "*.ini" config file.
         If the config files contains sections, their names are used as namespaces for
@@ -841,7 +786,7 @@ class ConfigDict(dict):
                 section[key] = value
         return self
 
-    def load_from_object(self, obj):
+    def load_from_class(self, obj):
         """
         Load values from a class or an instance.
         An object can be of one of the following two types:
@@ -988,26 +933,32 @@ class FileStorage:
         )
 if __name__ == '__main__':
     # h = HeadersDict({'CONTENT-TYPE': 'text/html; charset=UTF-8', 'CONNECTION': 'keep-alive'})
-    d = {'CONTENT-TYPE': 'text/html; charset=UTF-8', 'CONNECTION': 'keep-alive'}
-    l = [('CONTENT-TYPE', 'text/html; charset=UTF-8'), ('CONNECTION', 'keep-alive')]
-    h1 = HeadersDict(d)
-    h2 = HeadersDict(l)
-    # print(h1.to_wsgi_list())
-    print(h2.to_wsgi_list())
-    h2.add_header('powered-by', 'minim', haha='yaya')
-    print(h2.to_wsgi_list())
-    h2.set('powered-by', 'cymoo')
-    print(h2.to_wsgi_list())
-    h2['cache'] = 'forever'
-    print(h2.to_wsgi_list())
-    h2.add_header('powered-by', 'colleen')
-    print(h2.to_wsgi_list())
+    # d = {'CONTENT-TYPE': 'text/html; charset=UTF-8', 'CONNECTION': 'keep-alive'}
+    # l1 = [('CONTENT-TYPE', 'text/html; charset=UTF-8'), ('CONNECTION', 'keep-alive')]
+    # h1 = HeadersDict(d)
+    # h2 = HeadersDict(l1)
+    # # print(h1.to_wsgi_list())
+    # print(h2.to_wsgi_list())
+    # h2.add_header('powered-by', 'minim', haha='yaya')
+    # print(h2.to_wsgi_list())
+    # h2.set('powered-by', 'cymoo')
+    # print(h2.to_wsgi_list())
+    # h2['cache'] = 'forever'
+    # print(h2.to_wsgi_list())
+    # h2.add_header('powered-by', 'colleen')
+    # print(h2.to_wsgi_list())
 
 
 
-    # pairs = {'uname': ['sexmaker'], 'hobbits': ['girl', 'game', 'book'], 'sex': ['female'], 'motto': ['世界是我的表象']}
-    # # m = MultiDict(pairs)
+
+
+    pairs = {'uname': ['sexmaker'], 'hobbits': ['girl', 'game', 'book'], 'sex': ['female'], 'motto': ['世界是我的表象']}
+    m = MultiDict(pairs)
     # m = FormsDict(pairs)
+    print(m)
+
+    mm = MultiDict(m)
+    print(mm.to_dict())
     #
     # print(m.getlist('hobbits'))
     # print(m.hobbits)
