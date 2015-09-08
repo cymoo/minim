@@ -74,7 +74,7 @@ class Request(threading.local):
 
     @property
     def content_type(self):
-        return self.environ.get('CONTENT_TYPE', '').lower()
+        return self.environ.get('CONTENT_TYPE', '')
 
     @property
     def is_chunked(self):

@@ -65,7 +65,7 @@ def login():
         # print(request.POST.to_dict())
         # print(request.POST)
         # print('request.form:', request.form)
-        # print('request.content_type:', request.content_type)
+        print('request.content_type:', request.content_type)
         # # print(request.params.to_dict())
         # return request.params.hobbits
         # return request.environ['wsgi.input'].read()
@@ -74,7 +74,10 @@ def login():
         #     if not cont:
         #         break
         #     yield cont
-        print(request.form)
+        print('form', request.form)
+        print('file', request.files.avatar)
+        request.files.avatar.save('/Users/cymoo/Desktop/minim_test')
+
         return 'haha'
 
     return render('login.html')

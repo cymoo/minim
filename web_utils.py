@@ -116,7 +116,6 @@ RESPONSE_HEADERS = (
     'X-UA-Compatible',
 )
 
-RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), RESPONSE_HEADERS), RESPONSE_HEADERS))
 
 HEADER_X_POWERED_BY = ('X-Powered-By', 'minim/0.1')
 
@@ -256,7 +255,6 @@ def send_file(res, directory, filename):
                 block = f.read(block_size)
 
     return _static_file_generator(filepath)
-
 
 
 def environ_from_url(path):

@@ -24,7 +24,6 @@ __all__ = [
     'FileStorage',
     'Profile',
     'limit_time',
-    'find_key',
     'prettify_date',
     '_EmailMessage'
 ]
@@ -131,20 +130,6 @@ def safe_bytes(obj, encoding='utf-8'):
     # consider convert list, tuple, dict to bytes?
     else:
         raise TypeError('cannot do safe_bytes to %s', obj)
-
-
-def find_key(mapping, element):
-    """
-
-    :param dictionary:
-    :param value:
-    :return:
-    """
-    keys = []
-    for (key, value) in mapping.items():
-        if element is value:
-            keys.append(key)
-    return keys
 
 
 def prettify_date(then, now=None, lan='en'):

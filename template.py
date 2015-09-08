@@ -451,6 +451,75 @@ class _Set(_ScopeNode):
         return self.render_children(set_context)
 
 
+class _If(_ScopeNode):
+    """
+
+    """
+    def process_fragment(self, fragment):
+        try:
+            self.expr = fragment.split()[1]
+        except:
+            raise TemplateSyntaxError(fragment)
+
+    def render(self, context):
+        if self.end_tok.clean != 'endif':
+            raise TemplateError('"To match "%s", "endif" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
+
+        for branch in self.branches:
+            con_bit = eval(branch[0], context, {})
+            if con_bit:
+                return self.render_children(context, branch[1])
+
+    def exit_scope(self):
+        self.branches = self.split_children()
+
+    def split_children(self):
+        """
+        branches:
+        a list that stores expr-branch pairs: [[if-expr,if-branch],[elif-expr,elif-branch],
+        [else-expr,else-branch]]
+        """
+        branches = []
+        branch = []
+        expr = self.expr
+        for child in self.children:
+            if isinstance(child, (_Elif, _Else)):
+                branches.append([expr, branch])
+                branch = []
+                expr = child.expr
+                continue
+            branch.append(child)
+        else:
+            branches.append([expr, branch])
+        return branches
+
+
+class _Elif(_Node):
+    """
+
+    """
+    def process_fragment(self, fragment):
+        try:
+            self.expr = fragment.split()[1]
+        except:
+            raise TemplateSyntaxError(fragment)
+
+    def render(self, context):
+        pass
+
+
+class _Else(_Node):
+    """
+
+    """
+    def process_fragment(self, fragment):
+        self.expr = '1'
+
+    def render(self, context):
+        pass
+
+
 class _For(_ScopeNode):
     """
 
@@ -530,75 +599,6 @@ class _Empty(_Node):
     """
 
     """
-    def render(self, context):
-        pass
-
-
-class _If(_ScopeNode):
-    """
-
-    """
-    def process_fragment(self, fragment):
-        try:
-            self.expr = fragment.split()[1]
-        except:
-            raise TemplateSyntaxError(fragment)
-
-    def render(self, context):
-        if self.end_tok.clean != 'endif':
-            raise TemplateError('"To match "%s", "endif" is expected, but "%s" was found.' %
-                                (self.frag, self.end_tok.clean))
-
-        for branch in self.branches:
-            con_bit = eval(branch[0], context, {})
-            if con_bit:
-                return self.render_children(context, branch[1])
-
-    def exit_scope(self):
-        self.branches = self.split_children()
-
-    def split_children(self):
-        """
-        branches:
-        a list that stores expr-branch pairs: [[if-expr,if-branch],[elif-expr,elif-branch],
-        [else-expr,else-branch]]
-        """
-        branches = []
-        branch = []
-        expr = self.expr
-        for child in self.children:
-            if isinstance(child, (_Elif, _Else)):
-                branches.append([expr, branch])
-                branch = []
-                expr = child.expr
-                continue
-            branch.append(child)
-        else:
-            branches.append([expr, branch])
-        return branches
-
-
-class _Elif(_Node):
-    """
-
-    """
-    def process_fragment(self, fragment):
-        try:
-            self.expr = fragment.split()[1]
-        except:
-            raise TemplateSyntaxError(fragment)
-
-    def render(self, context):
-        pass
-
-
-class _Else(_Node):
-    """
-
-    """
-    def process_fragment(self, fragment):
-        self.expr = '1'
-
     def render(self, context):
         pass
 
