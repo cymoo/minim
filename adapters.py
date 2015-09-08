@@ -7,6 +7,7 @@ Adapters for template engines and WSGI servers.
 """
 
 __all__ = [
+    # the adapters for servers
     'ServerAdapter',
     'WSGIRefServer',
     'CherryPyServer',
@@ -16,7 +17,7 @@ __all__ = [
     'GeventServer',
     'GunicornServer',
     'AiohttpServer',
-
+    # the adapters for templates
     'TemplateAdapter',
     'MiniTemplate',
     'Jinja2Template',

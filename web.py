@@ -9,9 +9,7 @@ import os
 import sys
 import threading
 import re
-import cgi
 from urllib.parse import parse_qs, quote as url_quote, unquote as url_unquote
-from tempfile import TemporaryFile
 from http.cookies import SimpleCookie
 import time
 from datetime import timedelta, date, datetime
@@ -21,8 +19,11 @@ from json import loads as json_loads
 from io import BytesIO
 
 from utils import make_list, safe_bytes, safe_str
-from structures import ConfigDict, FormsDict, HeadersDict, environ_property, FileStorage
+from structures import MultiDict, ConfigDict, FormsDict, HeadersDict, environ_property,\
+    FileStorage, iter_multi_items, cached_property
 from web_utils import RESPONSE_STATUSES, HttpError, not_found, not_allowed
+from formpaser import default_stream_factory, FormDataParser, parse_options_header,\
+    get_input_stream
 
 # from session import Session
 
@@ -46,18 +47,19 @@ class Request(threading.local):
     # __slots__ = ('environ',)
 
     # MAX_MEM_FILE = 102400
+    charset = 'utf-8'
 
     #: the maximum content length. This is forwarded to the form data
     #: parsing function. When set and the :attr:'form' or :attr:'files'
     #: attribute is accessed and the parsing fails because more than the
     #: specified value is transmitted a 413 error is raised.
-    MAX_CONTENT_LENGTH = 10240000
+    MAX_CONTENT_LENGTH = 1024*1000*10
 
     #: the maximum form field size. This is forwarded to the form data
     #: parsing function. When set and the :attr:'form' and attr:'files'
     #: attribute is accessed and the data in memory for post data is longer
     #: than specified value a 413 error is raised.
-    MAX_FORM_MEMORY_SIZE = 1024*100
+    MAX_FORM_MEMORY_SIZE = 1024*1000
 
     def bind(self, environ=None):
         self.environ = {} if environ is None else environ
@@ -96,184 +98,359 @@ class Request(threading.local):
         """
         return int(self.environ.get('CONTENT_LENGTH') or -1)
 
-    @environ_property('environ', 'minim.request.params')
-    def params(self):
-        """
-        A :class:'FormsDict' with the combined values of :attr:'query' and
-        :attr:'forms'. File uploads are stored in :attr:'files'.
-        """
-        params = FormsDict()
-        for key, value in self.query.items():
-            params.add(key, value)
-        for key, value in self.forms.items():
-            params.add(key, value)
+    def _get_file_stream(self, total_content_length, content_type, filename=None,
+                         content_length=None):
+        """Called to get a stream for the file upload. This must provide a file-like
+        class with 'read()', 'readline()' and 'seek()' methods that is both writeable
+        and readable.
 
-        return params
 
-    @environ_property('environ', 'minim.request.json')
-    def json(self):
-        """
-        If the "Content-Type" header is "application/json", this property holds
-        the parsed content of the request body. Only requests smaller than :attr:
-        'MAX_MEM_FILE' are processed to avoid memory exhaustion.
+        :param total_content_length:
+        :param content_type: the mimetype of the uploaded file.
+        :param filename: the filename of the uploaded file. May be 'None'.
+        :param content_length: the length of this file. This value is usually not provided
+                               because web browsers do not provide this value.
         :return:
         """
-        ctype = self.environ.get('CONTENT_TYPE', '').lower().split(';')[0]
-
-        if ctype == 'application/json':
-            body_string = self._get_body_string()
-            if not body_string:
-                return None
-            return json_loads(body_string)
-        return None
-
-    @environ_property('environ', 'minim.request.forms')
-    def forms(self):
-        """
-        Form values parsed from an "url-encoded" or "multipart/form-data" encoded POST
-        or PUT request body.
-        The result is returned as a :class:'FormsDict'. All keys and values are string.
-        File uploads are stored separately in :attr:'files'.
-
-        :return:
-        """
-        forms = FormsDict()
-        for name, item in self.POST.items():
-            if not isinstance(item, FileStorage):
-                forms.add(name, item)
-        return forms
-
-    @environ_property('environ', 'minim.request.files')
-    def files(self):
-        """
-        File uploads parsed from "multipart/form-data" encoded POST or PUT request
-        body.
-
-        :return: Instances of :class:'FileStorage'.
-        """
-        files = FormsDict()
-        for name, item in self.POST.lists():
-            if isinstance(item, FileStorage):
-                files[name] = item
-        return files
-
-    def _iter_body(self, read_func, buffer_size):
-        """
-
-        :param read_func:
-        :param buffer_size:
-        :return:
-        """
-        max_read = max(0, self.content_length)
-        while max_read:
-            segment = read_func(min(max_read, buffer_size))
-            if not segment:
-                break
-            yield segment
-            max_read -= len(segment)
-
-    @staticmethod
-    def _iter_chunked(read_func, buffer_size):
-        """
-
-        :param read_func:
-        :param buffer_size:
-        :return:
-        """
-        http_400_error = HttpError(400, 'Error while parsing chunked transfer body.')
-        rn, sem, bs = safe_bytes('\r\n'), safe_bytes(';'), safe_bytes('')
-        while True:
-            header = read_func(1)
-            while header[-2:] != rn:
-                c = read_func(1)
-                header += c
-                if not c:
-                    raise http_400_error
-                if len(header) > buffer_size:
-                    raise http_400_error
-            size, _, _ = header.partition(sem)
-            try:
-                max_read = int(safe_str(size.strip()), 16)
-            except ValueError:
-                raise http_400_error
-            if max_read == 0:
-                break
-
-            buffer = bs
-            while max_read > 0:
-                if not buffer:
-                    buffer = read_func(min(max_read, buffer_size))
-
-                segment, buffer = buffer[:max_read], buffer[max_read:]
-                if not segment:
-                    raise http_400_error
-                yield segment
-
-                max_read -= len(segment)
-
-            if read_func(2) != rn:
-                raise http_400_error
-
-    @environ_property('environ', 'minim.request.body')
-    def _body(self):
-        try:
-            read_func = self.environ['wsgi.input'].read
-        except KeyError:
-            self.environ['wsgi.input'] = BytesIO()
-            return self.environ['wsgi.input']
-        body_iter = self._iter_chunked if self.is_chunked else self._iter_body
-
-        body, body_size, is_tmp_file = BytesIO(), 0, False
-        for segment in body_iter(read_func, self.MAX_FORM_MEMORY_SIZE):
-            body.write(segment)
-            print('body-value', body.getvalue())
-            body_size += len(segment)
-            print('body-size', body_size)
-
-            # if not is_tmp_file and body_size > self.MAX_FORM_MEMORY_SIZE:
-            #     body, tmp = TemporaryFile(), body
-            #     body.write(tmp.getvalue())
-            #     del tmp
-            #     is_tmp_file = True
-
-        self.environ['wsgi.input'] = body
-        body.seek(0)
-        return body
+        return default_stream_factory(total_content_length)
 
     @property
-    def body(self):
-        """
-        The HTTP request body as a seek-able file-like object.
-        Depending on :attr:'MEX_MEM_FILE', this is either a temporary file or
-        a :class:'io.BytesIO' instance. Accessing this property for the first
-        time reads and replaces the "wsgi.input" environ variable.
-        Subsequent accesses just do a 'seek(0)' on the file object.
+    def want_form_data_parsed(self):
+        """Returns True if the request method carries content."""
+        return bool(self.content_type)
 
+    # def make_form_data_parser(self):
+    #     """Creates the form data parser."""
+    #     return FormDataParser(self._get_file_stream,
+    #                           max_form_memory_size=self.MAX_FORM_MEMORY_SIZE,
+    #                           max_content_length=self.MAX_CONTENT_LENGTH,
+    #                           cls=MultiDict)
+
+    def _load_form_data(self):
+        """
+        Method used internally to retrieve submitted data. After calling this sets
+        'form' and 'files' on the request object to multi dicts filled with the
+        incoming form data. As a matter of fact the input stream will be empty
+        afterwards. You can also call this method to force the parsing of the
+        form data.
         :return:
         """
-        self._body.seek(0)
-        return self._body
+        if 'form' in self.__dict__:
+            return
 
-    def _get_body_string(self):
+        if self.want_form_data_parsed:
+            content_type = self.content_type
+            content_length = self.content_length
+            mimetype, options = parse_options_header(content_type)
+            parser = FormDataParser(self._get_file_stream, max_form_memory_size=self.MAX_FORM_MEMORY_SIZE,
+                                    max_content_length=self.MAX_CONTENT_LENGTH)
+            data = parser.parse(self._get_stream_for_parsing(),
+                                mimetype, content_length, options)
+            # print(data)
+        else:
+            data = (self.stream, MultiDict(), MultiDict)
+
+        d = self.__dict__
+        d['stream'], d['form'], d['files'] = data
+
+    def _get_stream_for_parsing(self):
         """
-        Read body until content-length or MAX_MEM_FILE into a string.
-        Raise HTTPError(413) on requests that are too large.
+        This is the same as accessing: attr:'stream' with the difference that if it
+        finds cached data from calling: meth:'get_data' first it will create a new
+        stream out of the cached data.
+        :return:
         """
-        length = self.content_length
+        cached_data = getattr(self, '_cached_data', None)
+        if cached_data is not None:
+            return BytesIO(cached_data)
+        return self.stream
 
-        if length > self.MAX_CONTENT_LENGTH:
-            raise HttpError(413, 'Request entity too large')
-        if length < 0:
-            length = self.MAX_MEM_FILE + 1
-        data = self.body.read(length)
+    @cached_property
+    def stream(self):
+        """
+        The stream to read incoming data from. Unlike :attr:'input_stream' this stream
+        is properly guarded that you can't accidentally read past the length of the input.
+        Minim will internally always refer to this stream to read data which makes it
+        possible to wrap this object with a stream that does filtering.
 
-        # if len(data) > self.MAX_CONTENT_LENGTH:
-        #     raise HttpError(413, 'Request entity too large')
+        This stream is now always available but might be consumed by the form parser later
+        on. Previously the stream was only set if no parsing happened.
+        :return:
+        """
+        return get_input_stream(self.environ)
 
-        return data
+    @environ_property
+    def input_stream(self):
+        """
+        In general it's a bad idea to use this one because you can easily read past
+        the boundary. Use the :attr:'stream' instead.
+        :return:
+        """
+        return self.environ['wsgi.input']
 
-    # um, what is PEP8? Is it delicious?
-    @environ_property('environ', 'minim.request.get')
+    def get_data(self, cache=True, as_text=False, parse_form_data=False):
+        """
+        This reads the buffered incoming data from the client into one byte string.
+        By default this is cached but that behavior can be changed by setting 'cache'
+        to 'False'.
+        Usually it's a bad idea to call this method without checking the content length
+        first as client could send dozens of megabytes or more to cause memory problems
+        on the server.
+
+        Note that if the form data was already parsed this method will not return anything
+        as form data parsing does not cache the data like this method does. To implicitly
+        invoke form data parsing function set 'parse_form_data' to 'True'. When this is
+        done the return value of this method will be an empty string if the form parser
+        handles the data. This generally is not necessary as if the whole data is cached
+        (which is the default) the form parser will used the cached data to parse the form
+        data. Please be generally aware of checking the content length first in any case
+        before calling this method to avoid exhausting server memory.
+
+        If 'as_text' is set to 'True' the return value will be a decoded unicode string.
+
+        :param cache:
+        :param as_text:
+        :param parse_form_data:
+        :return:
+        """
+
+        rv = getattr(self, '_cached_data', None)
+        if rv is None:
+            if parse_form_data:
+                self._load_form_data()
+            rv = self.stream.read()
+            if cache:
+                self._cached_data = rv
+        if as_text:
+            rv = rv.decode(self.charset)
+        return rv
+
+    def close(self):
+        """
+        Closes associated resources of this request object. This closes all file
+        handles explicitly. You can also use the request object in a with statement
+        which will automatically close it.
+        :return:
+        """
+        files = self.__dict__.get('files')
+        for key, value in iter_multi_items(files or ()):
+            value.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    @cached_property
+    def form(self):
+        """
+        The form parameters. A :class:'MultiDict' is returned from this function.
+        """
+        self._load_form_data()
+        return self.form
+
+    @cached_property
+    def files(self):
+        """
+        A :class:'MultiDict' object containing all uploaded files. Each key in
+        :attr:'files' is the name from the "<input type='file' name="">". Each value
+        in :attr:'files' is a :class:'FileStorage' object.
+
+        Note that :attr:'files' will only contain data if the request method was POST,
+        PUT or DELETE and "<form>" that posted to the request had "enctype="multipart
+        /form-data"". It will empty otherwise.
+        :return:
+        """
+        self._load_form_data()
+        return self.files
+
+    @cached_property
+    def values(self):
+        """
+        Return a multi dict for :attr:'args' and :attr:'form'.
+        """
+        pass
+
+    # @environ_property('environ', 'minim.request.params')
+    # def params(self):
+    #     """
+    #     A :class:'FormsDict' with the combined values of :attr:'query' and
+    #     :attr:'forms'. File uploads are stored in :attr:'files'.
+    #     """
+    #     params = FormsDict()
+    #     for key, value in self.query.items():
+    #         params.add(key, value)
+    #     for key, value in self.forms.items():
+    #         params.add(key, value)
+    #
+    #     return params
+    #
+    # @environ_property('environ', 'minim.request.json')
+    # def json(self):
+    #     """
+    #     If the "Content-Type" header is "application/json", this property holds
+    #     the parsed content of the request body. Only requests smaller than :attr:
+    #     'MAX_MEM_FILE' are processed to avoid memory exhaustion.
+    #     :return:
+    #     """
+    #     ctype = self.environ.get('CONTENT_TYPE', '').lower().split(';')[0]
+    #
+    #     if ctype == 'application/json':
+    #         body_string = self._get_body_string()
+    #         if not body_string:
+    #             return None
+    #         return json_loads(body_string)
+    #     return None
+    #
+    # @environ_property('environ', 'minim.request.forms')
+    # def forms(self):
+    #     """
+    #     Form values parsed from an "url-encoded" or "multipart/form-data" encoded POST
+    #     or PUT request body.
+    #     The result is returned as a :class:'FormsDict'. All keys and values are string.
+    #     File uploads are stored separately in :attr:'files'.
+    #
+    #     :return:
+    #     """
+    #     forms = FormsDict()
+    #     for name, item in self.POST.items():
+    #         if not isinstance(item, FileStorage):
+    #             forms.add(name, item)
+    #     return forms
+    #
+    # @environ_property('environ', 'minim.request.files')
+    # def files(self):
+    #     """
+    #     File uploads parsed from "multipart/form-data" encoded POST or PUT request
+    #     body.
+    #
+    #     :return: Instances of :class:'FileStorage'.
+    #     """
+    #     files = FormsDict()
+    #     for name, item in self.POST.lists():
+    #         if isinstance(item, FileStorage):
+    #             files[name] = item
+    #     return files
+
+    # def _iter_body(self, read_func, buffer_size):
+    #     """
+    #
+    #     :param read_func:
+    #     :param buffer_size:
+    #     :return:
+    #     """
+    #     max_read = max(0, self.content_length)
+    #     while max_read:
+    #         segment = read_func(min(max_read, buffer_size))
+    #         if not segment:
+    #             break
+    #         yield segment
+    #         max_read -= len(segment)
+    #
+    # @staticmethod
+    # def _iter_chunked(read_func, buffer_size):
+    #     """
+    #
+    #     :param read_func:
+    #     :param buffer_size:
+    #     :return:
+    #     """
+    #     http_400_error = HttpError(400, 'Error while parsing chunked transfer body.')
+    #     rn, sem, bs = safe_bytes('\r\n'), safe_bytes(';'), safe_bytes('')
+    #     while True:
+    #         header = read_func(1)
+    #         while header[-2:] != rn:
+    #             c = read_func(1)
+    #             header += c
+    #             if not c:
+    #                 raise http_400_error
+    #             if len(header) > buffer_size:
+    #                 raise http_400_error
+    #         size, _, _ = header.partition(sem)
+    #         try:
+    #             max_read = int(safe_str(size.strip()), 16)
+    #         except ValueError:
+    #             raise http_400_error
+    #         if max_read == 0:
+    #             break
+    #
+    #         buffer = bs
+    #         while max_read > 0:
+    #             if not buffer:
+    #                 buffer = read_func(min(max_read, buffer_size))
+    #
+    #             segment, buffer = buffer[:max_read], buffer[max_read:]
+    #             if not segment:
+    #                 raise http_400_error
+    #             yield segment
+    #
+    #             max_read -= len(segment)
+    #
+    #         if read_func(2) != rn:
+    #             raise http_400_error
+    #
+    # @environ_property('environ', 'minim.request.body')
+    # def _body(self):
+    #     try:
+    #         read_func = self.environ['wsgi.input'].read
+    #     except KeyError:
+    #         self.environ['wsgi.input'] = BytesIO()
+    #         return self.environ['wsgi.input']
+    #     body_iter = self._iter_chunked if self.is_chunked else self._iter_body
+    #
+    #     body, body_size, is_tmp_file = BytesIO(), 0, False
+    #     for segment in body_iter(read_func, self.MAX_FORM_MEMORY_SIZE):
+    #         body.write(segment)
+    #         print('body-value', body.getvalue())
+    #         body_size += len(segment)
+    #         print('body-size', body_size)
+    #
+    #         # if not is_tmp_file and body_size > self.MAX_FORM_MEMORY_SIZE:
+    #         #     body, tmp = TemporaryFile(), body
+    #         #     body.write(tmp.getvalue())
+    #         #     del tmp
+    #         #     is_tmp_file = True
+    #
+    #     self.environ['wsgi.input'] = body
+    #     body.seek(0)
+    #     return body
+    #
+    # @property
+    # def body(self):
+    #     """
+    #     The HTTP request body as a seek-able file-like object.
+    #     Depending on :attr:'MEX_MEM_FILE', this is either a temporary file or
+    #     a :class:'io.BytesIO' instance. Accessing this property for the first
+    #     time reads and replaces the "wsgi.input" environ variable.
+    #     Subsequent accesses just do a 'seek(0)' on the file object.
+    #
+    #     :return:
+    #     """
+    #     self._body.seek(0)
+    #     return self._body
+    #
+    # def _get_body_string(self):
+    #     """
+    #     Read body until content-length or MAX_MEM_FILE into a string.
+    #     Raise HTTPError(413) on requests that are too large.
+    #     """
+    #     length = self.content_length
+    #
+    #     if length > self.MAX_CONTENT_LENGTH:
+    #         raise HttpError(413, 'Request entity too large')
+    #     if length < 0:
+    #         length = self.MAX_MEM_FILE + 1
+    #     data = self.body.read(length)
+    #
+    #     # if len(data) > self.MAX_CONTENT_LENGTH:
+    #     #     raise HttpError(413, 'Request entity too large')
+    #
+    #     return data
+    #
+    # # um, what is PEP8? Is it delicious?
+    # @environ_property('environ', 'minim.request.get')
+    @cached_property
     def GET(self):
         """
         The :attr:'query_string' parsed into a :class:'FormsDict'.
@@ -287,80 +464,89 @@ class Request(threading.local):
             get.setlist(key, value)
         return get
 
-    # An alias for :attr:'GET'
-    query = GET
+    args = query = GET
 
-    @environ_property('environ', 'minim.request.post')
-    def POST(self):
-        """
-        The values of :attr:'forms' and :attr:'files' combined into a single
-        :class:'FormsDict'. Values are either strings (form values) or
-        instances of :class:'cgi.FieldStorage' (file uploads).
+    @property
+    def is_json(self):
+        return None
 
-        Default form content_type is "application/x-www-form-urlencoded".
-
-        :return:
-        """
-        # raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
-        # self._POST = Dict()
-        # for key in raw_data:
-        #     if isinstance(raw_data[key], list):
-        #         self._POST[key] = [v.value for v in raw_data[key]]
-        #     elif raw_data[key].filename:
-        #         self._POST[key] = raw_data[key]
-        #     else:
-        #         self._POST[key] = raw_data[key].value
-        # return self._POST
-
-        post = FormsDict()
-        if not self.content_type.startswith('multipart/'):
-            # print(self._get_body_string())
-            pairs = parse_qs(safe_str(self._get_body_string()))
-            for key, value in pairs.items():
-                post.setlist(key, value)
-            return post
-
-        safe_env = {'QUERY_STRING': ''}
-        for key in {'REQUEST_METHOD', 'CONTENT_TYPE', 'CONTENT_LENGTH'}:
-            if key in self.environ:
-                safe_env[key] = self.environ[key]
-
-        # args = dict(fp=self.body, environ=safe_env, keep_blank_values=True,
-        #             encoding='utf-8')
-
-        # print('wsgi-input', self.environ['wsgi.input'].read())
-
-        # print('content-type', self.content_type)
-
-        data = cgi.FieldStorage(fp=self.body, environ=safe_env, keep_blank_values=True)
-
-        print('data-headers', data.headers)
-        # http://bugs.python.org/issue18394
-        # self['_cgi.FieldStorage'] = data
-        data = data.list or []
-
-        for item in data:
-            if item.filename:
-                # print('filename', item.filename)
-                # post[item.name] = FileStorage(item.file, item.filename, item.name)
-                file = FileStorage(item.file, item.filename, item.name)
-                print('item.file', item.file)
-                print('item.filename', item.filename)
-                print('item.name', item.name)
-                print('item.headers', item.headers)
-                print('item.content-type', item.type)
-                print('item.type_options', item.type_options)
-                print('request.content-type', self.content_type)
-                post.add(item.name, file)
-
-            else:
-                # post[item.name] = item.value
-                post.add(item.name, item.value)
-
-        return post
-
-    # An alias for :attr:'POST'
-    post = POST
+    def json(self):
+        pass
+    #
+    # # An alias for :attr:'GET'
+    # query = GET
+    #
+    # @environ_property('environ', 'minim.request.post')
+    # def POST(self):
+    #     """
+    #     The values of :attr:'forms' and :attr:'files' combined into a single
+    #     :class:'FormsDict'. Values are either strings (form values) or
+    #     instances of :class:'cgi.FieldStorage' (file uploads).
+    #
+    #     Default form content_type is "application/x-www-form-urlencoded".
+    #
+    #     :return:
+    #     """
+    #     # raw_data = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
+    #     # self._POST = Dict()
+    #     # for key in raw_data:
+    #     #     if isinstance(raw_data[key], list):
+    #     #         self._POST[key] = [v.value for v in raw_data[key]]
+    #     #     elif raw_data[key].filename:
+    #     #         self._POST[key] = raw_data[key]
+    #     #     else:
+    #     #         self._POST[key] = raw_data[key].value
+    #     # return self._POST
+    #
+    #     post = FormsDict()
+    #     if not self.content_type.startswith('multipart/'):
+    #         # print(self._get_body_string())
+    #         pairs = parse_qs(safe_str(self._get_body_string()))
+    #         for key, value in pairs.items():
+    #             post.setlist(key, value)
+    #         return post
+    #
+    #     safe_env = {'QUERY_STRING': ''}
+    #     for key in {'REQUEST_METHOD', 'CONTENT_TYPE', 'CONTENT_LENGTH'}:
+    #         if key in self.environ:
+    #             safe_env[key] = self.environ[key]
+    #
+    #     # args = dict(fp=self.body, environ=safe_env, keep_blank_values=True,
+    #     #             encoding='utf-8')
+    #
+    #     # print('wsgi-input', self.environ['wsgi.input'].read())
+    #
+    #     # print('content-type', self.content_type)
+    #
+    #     data = cgi.FieldStorage(fp=self.body, environ=safe_env, keep_blank_values=True)
+    #
+    #     print('data-headers', data.headers)
+    #     # http://bugs.python.org/issue18394
+    #     # self['_cgi.FieldStorage'] = data
+    #     data = data.list or []
+    #
+    #     for item in data:
+    #         if item.filename:
+    #             # print('filename', item.filename)
+    #             # post[item.name] = FileStorage(item.file, item.filename, item.name)
+    #             file = FileStorage(item.file, item.filename, item.name)
+    #             print('item.file', item.file)
+    #             print('item.filename', item.filename)
+    #             print('item.name', item.name)
+    #             print('item.headers', item.headers)
+    #             print('item.content-type', item.type)
+    #             print('item.type_options', item.type_options)
+    #             print('request.content-type', self.content_type)
+    #             post.add(item.name, file)
+    #
+    #         else:
+    #             # post[item.name] = item.value
+    #             post.add(item.name, item.value)
+    #
+    #     return post
+    #
+    # # An alias for :attr:'POST'
+    # post = POST
 
     def accept_mimetypes(self):
         pass
@@ -442,6 +628,10 @@ class Request(threading.local):
     #     """
     #     return self.environ
 
+    @property
+    def referer(self):
+        """"""
+        return self.environ.get('HTTP_REFERER', '0.0.0.0')
     @property
     def host(self):
         """
@@ -601,25 +791,25 @@ class Request(threading.local):
         """'True' if the request is secure."""
         return self.environ.get('wsgi.url_scheme', '') == 'https'
 
-    @property
-    def is_multithread(self):
-        """'True' if the application is served."""
-        return self.environ.get('wsgi.multithread')
-
-    @property
-    def is_multiprocess(self):
-        """'True' if the application is served by a WSGI server that
-        spawns multiple processed.
-        """
-        return self.environ.get('wsgi.multiprocess')
-
-    @property
-    def is_run_once(self):
-        """'True' if the application will be executed only once in a
-        process lifetime. This is the case for CGI for example, but
-        it's not guaranteed that execution only happens one time.
-        """
-        return self.environ.get('wsgi.run_once')
+    # @property
+    # def is_multithread(self):
+    #     """'True' if the application is served."""
+    #     return self.environ.get('wsgi.multithread')
+    #
+    # @property
+    # def is_multiprocess(self):
+    #     """'True' if the application is served by a WSGI server that
+    #     spawns multiple processed.
+    #     """
+    #     return self.environ.get('wsgi.multiprocess')
+    #
+    # @property
+    # def is_run_once(self):
+    #     """'True' if the application will be executed only once in a
+    #     process lifetime. This is the case for CGI for example, but
+    #     it's not guaranteed that execution only happens one time.
+    #     """
+    #     return self.environ.get('wsgi.run_once')
 
     def copy(self):
         """
@@ -730,9 +920,6 @@ class Response(threading.local):
     def set_header(self, name, value, **kw):
         self._headers.set(name, value, **kw)
 
-    def set_default_header(self, name, default):
-        self._headers.setdefault(name, default)
-
     def add_header(self, name, value, **kw):
         self._headers.add(name, value, **kw)
 
@@ -777,7 +964,7 @@ class Response(threading.local):
     def cache_control(self):
         pass
 
-    def make_conditiontional(self, request_or_environ):
+    def make_conditional(self, request_or_environ):
         pass
 
     def add_etag(self):

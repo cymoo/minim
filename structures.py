@@ -7,6 +7,7 @@ This module provides main data structures that power Minim.
 
 import os
 import json
+import mimetypes
 from threading import RLock
 from configparser import ConfigParser
 from copy import deepcopy
@@ -318,34 +319,11 @@ class MultiDict(dict):
             return dict(self.items())
         return dict(self.lists())
 
-    @staticmethod
-    def _iter_multi_items(mapping):
-        """
-        Iterates over the items of a mapping yielding keys and values
-        without dropping any from more complex structures.
-
-        :param mapping:
-        :return:
-        """
-        if isinstance(mapping, MultiDict):
-            for item in mapping.items(multi=True):
-                yield item
-        elif isinstance(mapping, dict):
-            for key, value in mapping.items():
-                if isinstance(value, (tuple, list)):
-                    for v in value:
-                        yield key, v
-                else:
-                    yield key, value
-        else:
-            for item in mapping:
-                yield item
-
     def update(self, other_dict):
         """
         Update() extends rather than replaces existing key list.
         """
-        for key, value in self._iter_multi_items(other_dict):
+        for key, value in iter_multi_items(other_dict):
             self.add(key, value)
 
     def pop(self, key, default=None):
@@ -400,6 +378,29 @@ class MultiDict(dict):
         return '%s(%r)' % (self.__class__.__name__, list(self.items(multi=True)))
 
 
+def iter_multi_items(mapping):
+    """
+    Iterates over the items of a mapping yielding keys and values
+    without dropping any from more complex structures.
+
+    :param mapping:
+    :return:
+    """
+    if isinstance(mapping, MultiDict):
+        for item in mapping.items(multi=True):
+            yield item
+    elif isinstance(mapping, dict):
+        for key, value in mapping.items():
+            if isinstance(value, (tuple, list)):
+                for v in value:
+                    yield key, v
+            else:
+                yield key, value
+    else:
+        for item in mapping:
+            yield item
+
+
 class FormsDict(MultiDict):
     """
     A class is used to store request form data.
@@ -411,6 +412,35 @@ class FormsDict(MultiDict):
     def __getattr__(self, name):
         value = self.getlist(name)
         return value if len(value) > 1 else value[0]
+
+
+class FilesDict(FormsDict):
+    """
+    A special sub class of :class:'FormsDict' that has convenience methods
+    to add files to it. This is generally useful for unittesting.
+    """
+    def add_file(self, name, file, filename=None, content_type=None):
+        """
+        Adds a new file to the dict.
+
+        :param name: the name of the field.
+        :param file: a filename of a :class:'file'-like or a class:'FileStorage' object.
+        :param filename: an optional filename.
+        :param content_type: an optional content type.
+        """
+        if isinstance(file, FileStorage):
+            value = file
+        else:
+            if isinstance(file, str):
+                if filename is None:
+                    filename = file
+                file = open(file, 'rb')
+            if filename and content_type is None:
+                content_type = mimetypes.guess_type(filename)[0] or \
+                    'application/octet-stream'
+            value = FileStorage(file, filename, name, content_type)
+
+        self.add(name, value)
 
 
 class HeadersDict:
