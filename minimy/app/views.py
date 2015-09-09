@@ -76,7 +76,7 @@ def login():
         #     yield cont
         print('form', request.form)
         print('file', request.files.avatar)
-        request.files.avatar.save('/Users/cymoo/Desktop/minim_test')
+        request.files.avatar.save('/Users/cymoo/Desktop/minim_file')
 
         return 'haha'
 

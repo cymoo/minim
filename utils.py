@@ -7,6 +7,8 @@ minim.utils
 """
 import sys
 import os
+import tempfile
+import timeit
 import re
 import threading
 from unicodedata import normalize
@@ -74,6 +76,65 @@ def import_from_string(import_name):
 
     except ImportError:
         raise ImportError("cannot import module from %s." % import_name)
+
+
+def unquote_header_value(value, is_filename=False):
+    r"""Unquotes a header value.  (Reversal of :func:`quote_header_value`).
+    This does not use the real unquoting but what browsers are actually
+    using for quoting.
+    .. versionadded:: 0.5
+    :param value: the header value to unquote.
+    """
+    if value and value[0] == value[-1] == '"':
+        # this is not the real unquoting, but fixing this so that the
+        # RFC is met will result in bugs with internet explorer and
+        # probably some other browsers as well.  IE for example is
+        # uploading files with "C:\foo\bar.txt" as filename
+        value = value[1:-1]
+
+        # if this is a filename and the starting characters look like
+        # a UNC path, then just return the value without quotes.  Using the
+        # replace sequence below on a UNC path has the effect of turning
+        # the leading double slash into a single slash and then
+        # _fix_ie_filename() doesn't work correctly.  See #458.
+        if not is_filename or value[:2] != '\\\\':
+            return value.replace('\\\\', '\\').replace('\\"', '"')
+    return value
+
+
+def parse_options_header(value):
+    """Parse a ``Content-Type`` like header into a tuple with the content
+    type and the options:
+    >>> parse_options_header('text/html; charset=utf8')
+    ('text/html', {'charset': 'utf8'})
+    This should not be used to parse ``Cache-Control`` like headers that use
+    a slightly different format.  For these headers use the
+    :func:`parse_dict_header` function.
+    .. versionadded:: 0.5
+    :param value: the header to parse.
+    :return: (str, options)
+    """
+    def _tokenize(string):
+        _quoted_string_re = r'"[^"\\]*(?:\\.[^"\\]*)*"'
+
+        _option_header_piece_re = re.compile(
+            r';\s*(%s|[^\s;=]+)\s*(?:=\s*(%s|[^;]+))?\s*' %
+            (_quoted_string_re, _quoted_string_re)
+        )
+        for match in _option_header_piece_re.finditer(string):
+            k, v = match.groups()
+            k = unquote_header_value(k)
+            if v is not None:
+                v = unquote_header_value(v, k == 'filename')
+            yield k, v
+
+    if not value:
+        return '', {}
+
+    parts = _tokenize(';' + value)
+    name = next(parts)[0]
+    extra = dict(parts)
+    return name, extra
 
 
 def secure_filename(filename):
@@ -183,7 +244,11 @@ class Profile:
 
     from webpy.utils
     """
-    pass
+    def __init__(self, func):
+        self.func = func
+
+    def __call__(self, *args, **kwargs):
+        pass
 
 
 def send_mail(from_address, to_address, subject, message, headers=None, **kw):

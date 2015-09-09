@@ -6,6 +6,7 @@ minim.http_utils
 """
 
 import os
+import re
 import mimetypes
 
 # all known response statues:

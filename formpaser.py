@@ -17,7 +17,7 @@ from itertools import chain, repeat, tee
 from functools import update_wrapper
 
 from structures import FormsDict, FilesDict, HeadersDict, FileStorage
-from utils import safe_str, safe_bytes
+from utils import safe_str, safe_bytes, parse_options_header
 
 
 __all__ = [
@@ -97,7 +97,7 @@ class LimitedStream(object):
         """
         if self._pos >= self.limit:
             return self.on_exhausted()
-        if size is None or size == -1:  # -1 is for consistence with file
+        if size is None or size == -1:  #: -1 is for consistence with file
             size = self.limit
         to_read = min(self.limit - self._pos, size)
         try:
@@ -109,10 +109,10 @@ class LimitedStream(object):
         self._pos += len(read)
         return read
 
-    def readline(self):
+    def readline(self, size=None):
         return NotImplemented
 
-    def readlines(self):
+    def readlines(self, size=None):
         return NotImplemented
 
     def tell(self):
@@ -154,14 +154,6 @@ def get_input_stream(environ, safe_fallback=True):
 
 def stream_iter(stream, limit, buffer_size):
     """Helper for the line and chunk iter functions."""
-    # if isinstance(stream, (bytes, bytearray, str)):
-    #     raise TypeError('Passed a string or byte object instead of '
-    #                     'true iterator or stream.')
-    # if not hasattr(stream, 'read'):
-    #     for item in stream:
-    #         if item:
-    #             yield item
-    #     return
     if not isinstance(stream, LimitedStream) and limit is not None:
         stream = LimitedStream(stream, limit)
     _read = stream.read
@@ -240,23 +232,6 @@ class FormDataParser(object):
         self.max_content_length = max_content_length
         self.silent = silent
 
-    # def parse_from_environ(self, environ):
-    #     """Parses the information from the environment as form data.
-    #
-    #     :param environ: the WSGI environment to be used for parsing.
-    #     :return: A tuple in the form ``(stream, form, files)``.
-    #     """
-    #     content_type = environ.get('CONTENT_TYPE', '')
-    #     try:
-    #         content_length = max(0, int(environ.get('CONTENT_LENGTH')))
-    #     except (TypeError, ValueError):
-    #         raise Exception('content-length is missing, are you using transfer encoding?'
-    #                         'sorry, Minim does not support it currently.')
-    #
-    #     mimetype, options = parse_options_header(content_type)
-    #     return self.parse(get_input_stream(environ), mimetype,
-    #                       content_length, options)
-
     def parse(self, stream, mimetype, content_length, options=None):
         """Parses the information from the given stream, mimetype,
         content length and mimetype parameters.
@@ -331,11 +306,8 @@ class URLEncodedParser:
     @staticmethod
     def _url_decode_impl(pair_iter, charset, keep_blank_values, errors):
         for pair in pair_iter:
-            print('pair:', pair)
             if not pair:
                 continue
-            # s = make_literal_wrapper(pair)
-            # equal = s('=')
             equal = b'='
             if equal in pair:
                 key, value = pair.split(equal, 1)
@@ -343,10 +315,7 @@ class URLEncodedParser:
                 if not keep_blank_values:
                     continue
                 key = pair
-                # value = s('')
                 value = b''
-            # print('key, value', key, value)
-            # yield url_unquote_plus(key), url_unquote_plus(value, charset, errors)
             yield unquote_plus(safe_str(key)), unquote_plus(safe_str(value),
                                                             charset, errors)
 
@@ -371,11 +340,6 @@ class URLEncodedParser:
             return
 
         _iter = chain((first_item,), _iter)
-        # if isinstance(first_item, str):
-        #     separator = safe_str(separator)
-        #     _split = re.compile(r'(%s)' % re.escape(separator)).split
-        #     _join = ''.join
-        # else:
 
         separator = safe_bytes(separator)
         _split = re.compile(b'(' + re.escape(separator) + b')').split
@@ -399,10 +363,9 @@ class URLEncodedParser:
             yield _join(buffer)
 
     def parse(self, stream, keep_blank_values=True, separator='&', limit=None):
-        """Works like :func:`url_decode` but decodes a stream.  The behavior
-        of stream and limit follows functions like :func:`.make_line_iter`.
-        The generator of pairs is directly fed to the :class:'MultiDict',
-        so you can consume the data while it's parsed.
+        """The behavior of stream and limit follows functions like :func:
+        `make_line_iter`. The generator of pairs is directly fed to the :class:
+        'MultiDict', so you can consume the data while it's parsed.
 
         :param stream: a stream with the encoded querystring
         :param keep_blank_values: Set to `False` if you don't want empty values to
@@ -416,104 +379,85 @@ class URLEncodedParser:
                                                keep_blank_values, self.errors))
 
 
-#: an iterator that yields empty strings
-_empty_string_iter = repeat('')
-
-#: a regular expression for multipart boundaries
-_multipart_boundary_re = re.compile('^[ -~]{0,200}[!-~]$')
-
-#: supported http encodings that are also available in python we support
-#: for multipart messages.
-_supported_multipart_encodings = frozenset(['base64', 'quoted-printable'])
-
-
 _begin_form = 'begin_form'
 _begin_file = 'begin_file'
 _cont = 'content'
 _end = 'end'
 
 
-def parse_multipart_headers(iterable):
-    """Parses multipart headers from an iterable that yields lines (including
-    the trailing newline symbol).  The iterable has to be newline terminated.
-
-    The iterable will stop at the line where the headers ended so it can be
-    further consumed.
-
-    :param iterable: iterable of strings that are newline terminated
-    """
-    def _line_parse(l):
-        """Removes line ending characters and returns a tuple (`stripped_line`,
-        `is_terminated`).
-        """
-        if l[-2:] in ['\r\n']:
-            return l[:-2], True
-        elif l[-1:] in ['\r', '\n']:
-            return l[:-1], True
-        return l, False
-
-    result = []
-    # print('itititit', list(iterable))
-    for line in iterable:
-        # print('str(line)', str(line))
-        line, line_terminated = _line_parse(safe_str(line))
-        # print('line,line-ter', line, line_terminated)
-        if not line_terminated:
-            # why this exception is not raised.......
-            raise ValueError('unexpected end of line in multipart header')
-        if not line:
-            break
-        elif line[0] in ' \t' and result:
-            key, value = result[-1]
-            result[-1] = (key, value + '\n ' + line[1:])
-        else:
-            parts = line.split(':', 1)
-            if len(parts) == 2:
-                print('p1', parts[0])
-                print('p2', parts[1])
-                result.append((parts[0].strip(), parts[1].strip()))
-
-    # we link the list to the headers, no need to create a copy, the
-    # list was not shared anyways.
-    return HeadersDict(result)
-
-
 class MultiPartParser(object):
-
     def __init__(self, stream_factory=None, charset='utf-8', errors='replace',
-                 max_form_memory_size=None, cls=None, buffer_size=64 * 1024):
+                 max_form_memory_size=None, buffer_size=64 * 1024):
         self.stream_factory = stream_factory
         self.charset = charset
         self.errors = errors
         self.max_form_memory_size = max_form_memory_size
         if stream_factory is None:
             stream_factory = default_stream_factory
-        if cls is None:
-            cls = FormsDict
-        self.cls = cls
 
-        # make sure the buffer size is divisible by four so that we can base64
-        # decode chunk by chunk
+        #: Make sure the buffer size is divisible by four so that we can base64
+        #: decode chunk by chunk;
         assert buffer_size % 4 == 0, 'buffer size has to be divisible by 4'
-        # also the buffer size has to be at least 1024 bytes long or long headers
-        # will freak out the system
+        #: also the buffer size has to be at least 1024 bytes long or long headers
+        #: will freak out the system.
         assert buffer_size >= 1024, 'buffer size has to be at least 1KB'
 
         self.buffer_size = buffer_size
 
-    # def _fix_ie_filename(self, filename):
-    #     """Internet Explorer 6 transmits the full file name if a file is
-    #     uploaded.  This function strips the full path if it thinks the
-    #     filename is Windows-like absolute.
-    #     """
-    #     if filename[1:3] == ':\\' or filename[:2] == '\\\\':
-    #         return filename.split('\\')[-1]
-    #     return filename
+    @staticmethod
+    def _fix_ie_filename(filename):
+        """Ancient IE transmits the full file name if a file is
+        uploaded. This function strips the full path if it thinks the
+        filename is Windows-like absolute.
+        """
+        if filename[1:3] == ':\\' or filename[:2] == '\\\\':
+            return filename.split('\\')[-1]
+        return filename
 
     @staticmethod
     def is_valid_multipart_boundary(boundary):
         """Checks if the string given is a valid multipart boundary."""
-        return _multipart_boundary_re.match(boundary) is not None
+        multipart_boundary_re = re.compile('^[ -~]{0,200}[!-~]$')
+        return multipart_boundary_re.match(boundary) is not None
+
+    @staticmethod
+    def parse_multipart_headers(iterable):
+        """Parses multipart headers from an iterable that yields lines (including
+        the trailing newline symbol).  The iterable has to be newline terminated.
+
+        The iterable will stop at the line where the headers ended so it can be
+        further consumed.
+
+        :param iterable: iterable of strings that are newline terminated
+        """
+        def _line_parse(l):
+            """Removes line ending characters and returns a tuple (`stripped_line`,
+            `is_terminated`).
+            """
+            if l[-2:] in ['\r\n']:
+                return l[:-2], True
+            elif l[-1:] in ['\r', '\n']:
+                return l[:-1], True
+            return l, False
+
+        result = []
+        for line in iterable:
+            line, line_terminated = _line_parse(safe_str(line))
+            if not line_terminated:
+                # why this exception is not raised.......
+                raise ValueError('unexpected end of line in multipart header.')
+            if not line:
+                break
+            elif line[0] in ' \t' and result:
+                key, value = result[-1]
+                result[-1] = (key, value + '\n ' + line[1:])
+            else:
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    result.append((parts[0].strip(), parts[1].strip()))
+
+        return HeadersDict(result)
+
 
     @staticmethod
     def _find_terminator(iterator):
@@ -535,9 +479,10 @@ class MultiPartParser(object):
 
     @staticmethod
     def get_part_encoding(headers):
+        supported_multipart_encodings = frozenset(['base64', 'quoted-printable'])
         transfer_encoding = headers.get('content-transfer-encoding')
         if transfer_encoding is not None and \
-           transfer_encoding in _supported_multipart_encodings:
+           transfer_encoding in supported_multipart_encodings:
             return transfer_encoding
 
     def get_part_charset(self, headers):
@@ -551,6 +496,7 @@ class MultiPartParser(object):
     def start_file_streaming(self, filename, headers, total_content_length):
         if isinstance(filename, bytes):
             filename = filename.decode(self.charset, self.errors)
+        filename = self._fix_ie_filename(filename)
         content_type = headers.get('content-type')
         try:
             content_length = int(headers['content-length'])
@@ -560,21 +506,12 @@ class MultiPartParser(object):
                                         filename, content_length)
         return filename, container
 
-    @staticmethod
-    def in_memory_threshold_reached(byte_string):
-        # raise exceptions.RequestEntityTooLarge()
-        raise Exception('foo')
-
     def validate_boundary(self, boundary):
         if not boundary:
             self.fail('Missing boundary')
         if not self.is_valid_multipart_boundary(boundary):
             self.fail('Invalid boundary: %s' % boundary)
-        if len(boundary) > self.buffer_size:  # pragma: no cover
-            # this should never happen because we check for a minimum size
-            # of 1024 and boundaries may not be longer than 200.  The only
-            # situation when this happens is for non debug builds where
-            # the assert is skipped.
+        if len(boundary) > self.buffer_size:
             self.fail('Boundary longer than buffer size')
 
     @staticmethod
@@ -617,41 +554,35 @@ class MultiPartParser(object):
             yield _join(buffer)
 
     def parse_lines(self, stream, boundary, content_length):
-        """Generate parts of
+        """Generate parts:
         ``('begin_form', (headers, name))``
         ``('begin_file', (headers, name, filename))``
         ``('cont', bytestring)``
         ``('end', None)``
-        Always obeys the grammar
+
+        Always obeys the grammar:
         parts = ( begin_form cont* end |
                   begin_file cont* end )*
         """
+        empty_string_iter = repeat('')
+
         next_part = b'--' + boundary
         last_part = next_part + b'--'
 
         iterator = chain(self.make_line_iter(stream, limit=content_length,
                                              buffer_size=self.buffer_size),
-                         '')
+                         empty_string_iter)
 
         terminator = self._find_terminator(iterator)
-        print('boundary', boundary)
-        print('next', next_part)
-        print('last', last_part)
-        print('terminator', terminator)
 
         if terminator == last_part:
-            # print('flag1')
             return
         elif terminator != next_part:
-            # print('flag2')
             self.fail('Expected boundary at start of multipart data')
 
         while terminator != last_part:
-            headers = parse_multipart_headers(iterator)
-            print('header-why', headers)
-
+            headers = self.parse_multipart_headers(iterator)
             disposition = headers.get('content-disposition')
-            print('disposition-why', disposition)
             if disposition is None:
                 self.fail('Missing Content-Disposition header')
             disposition, extra = parse_options_header(disposition)
@@ -663,13 +594,10 @@ class MultiPartParser(object):
             # if no content type is given we stream into memory.  A list is
             # used as a temporary container.
             if filename is None:
-                # print('_begin_form,header,name', _begin_form, (headers, name))
                 yield _begin_form, (headers, name)
-
             # otherwise we parse the rest of the headers and ask the stream
             # factory for something we can write in.
             else:
-                # print('_begin_file,header,name', _begin_form, (headers, name))
                 yield _begin_file, (headers, name, filename)
 
             buf = b''
@@ -688,20 +616,19 @@ class MultiPartParser(object):
                     try:
                         line = codecs.decode(line, transfer_encoding)
                     except Exception:
-                        self.fail('could not decode transfer encoded chunk')
+                        self.fail('could not decode transfer encoded chunk.')
 
                 # we have something in the buffer from the last iteration.
                 # this is usually a newline delimiter.
                 if buf:
-                    # print('_cont, sbuf', _cont, buf)
                     yield _cont, buf
-                    buf = b''
+                    # buf = b''
 
                 # If the line ends with windows CRLF we write everything except
                 # the last two bytes.  In all other cases however we write
                 # everything except the last byte.  If it was a newline, that's
                 # fine, otherwise it does not matter because we will write it
-                # the next iteration.  this ensures we do not write the
+                # the next iteration.  This ensures we do not write the
                 # final newline into the stream.  That way we do not have to
                 # truncate the stream.  However we do have to make sure that
                 # if something else than a newline is in there we write it
@@ -712,20 +639,18 @@ class MultiPartParser(object):
                 else:
                     buf = line[-1:]
                     cutoff = -1
-                # print('_cont,line[:cutoff]', _cont, line[:cutoff])
                 yield _cont, line[:cutoff]
 
-            else:  # pragma: no cover
+            else:
                 raise ValueError('unexpected end of part')
 
             # if we have a leftover in the buffer that is not a newline
-            # character we have to flush it, otherwise we will chop of
+            # character we have to flush it, otherwise we will chop off
             # certain values.
             if buf not in (b'', b'\r', b'\n', b'\r\n'):
-                # print('_cont, buf', _cont, buf)
+                print('wow~~~a leftover ')
                 yield _cont, buf
 
-            # print('_end,none', _end, None)
             yield _end, None
 
     def parse_parts(self, stream, boundary, content_length):
@@ -759,7 +684,7 @@ class MultiPartParser(object):
                 if guard_memory:
                     in_memory += len(ell)
                     if in_memory > self.max_form_memory_size:
-                        self.in_memory_threshold_reached(in_memory)
+                        raise Exception('request entity is too large.')
 
             elif ellt == _end:
                 if is_file:
@@ -778,72 +703,12 @@ class MultiPartParser(object):
             self.parse_parts(stream, boundary, content_length), 2)
         form = (p[1] for p in form_stream if p[0] == 'form')
         files = (p[1] for p in file_stream if p[0] == 'file')
-        return self.cls(form), self.cls(files)
+        return FormsDict(form), FilesDict(files)
 
 
 ####
 #: ~~~
 ####
-_quoted_string_re = r'"[^"\\]*(?:\\.[^"\\]*)*"'
-
-_option_header_piece_re = re.compile(
-    r';\s*(%s|[^\s;=]+)\s*(?:=\s*(%s|[^;]+))?\s*' %
-    (_quoted_string_re, _quoted_string_re)
-)
-
-
-def unquote_header_value(value, is_filename=False):
-    r"""Unquotes a header value.  (Reversal of :func:`quote_header_value`).
-    This does not use the real unquoting but what browsers are actually
-    using for quoting.
-    .. versionadded:: 0.5
-    :param value: the header value to unquote.
-    """
-    if value and value[0] == value[-1] == '"':
-        # this is not the real unquoting, but fixing this so that the
-        # RFC is met will result in bugs with internet explorer and
-        # probably some other browsers as well.  IE for example is
-        # uploading files with "C:\foo\bar.txt" as filename
-        value = value[1:-1]
-
-        # if this is a filename and the starting characters look like
-        # a UNC path, then just return the value without quotes.  Using the
-        # replace sequence below on a UNC path has the effect of turning
-        # the leading double slash into a single slash and then
-        # _fix_ie_filename() doesn't work correctly.  See #458.
-        if not is_filename or value[:2] != '\\\\':
-            return value.replace('\\\\', '\\').replace('\\"', '"')
-    return value
-
-
-def parse_options_header(value):
-    """Parse a ``Content-Type`` like header into a tuple with the content
-    type and the options:
-    >>> parse_options_header('text/html; charset=utf8')
-    ('text/html', {'charset': 'utf8'})
-    This should not be used to parse ``Cache-Control`` like headers that use
-    a slightly different format.  For these headers use the
-    :func:`parse_dict_header` function.
-    .. versionadded:: 0.5
-    :param value: the header to parse.
-    :return: (str, options)
-    """
-    def _tokenize(string):
-        for match in _option_header_piece_re.finditer(string):
-            k, v = match.groups()
-            k = unquote_header_value(k)
-            if v is not None:
-                v = unquote_header_value(v, k == 'filename')
-            yield k, v
-
-    if not value:
-        return '', {}
-
-    parts = _tokenize(';' + value)
-    name = next(parts)[0]
-    extra = dict(parts)
-    return name, extra
-
 
 
 # def make_literal_wrapper(reference):

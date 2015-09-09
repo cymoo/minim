@@ -108,3 +108,5 @@ def see_other(location):
     Do temporary redirect.
     """
     return RedirectError(303, location)
+
+import builtins
