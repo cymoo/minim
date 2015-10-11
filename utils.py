@@ -1,3 +1,4 @@
+# coding=utf-8
 """
 minim.utils
 ~~~~~~~~~~~
@@ -102,7 +103,16 @@ def unquote_header_value(value, is_filename=False):
     return value
 
 
-def parse_options_header(value):
+_option_header_start_mime_type = re.compile(r',\s*([^;,\s]+)([;,]\s*.+)?')
+_unsafe_header_chars = set('()<>@,;:\"/[]?={} \t')
+_quoted_string_re = r'"[^"\\]*(?:\\.[^"\\]*)*"'
+_option_header_piece_re = re.compile(
+    r';\s*(%s|[^\s;,=]+)\s*(?:=\s*(%s|[^;,]+)?)?\s*' %
+    (_quoted_string_re, _quoted_string_re)
+)
+
+
+def parse_options_header(value, multiple=False):
     """Parse a ``Content-Type`` like header into a tuple with the content
     type and the options:
     >>> parse_options_header('text/html; charset=utf8')
@@ -112,29 +122,43 @@ def parse_options_header(value):
     :func:`parse_dict_header` function.
     .. versionadded:: 0.5
     :param value: the header to parse.
-    :return: (str, options)
+    :param multiple: Whether try to parse and return multiple MIME types
+    :return: (mimetype, options) or (mimetype, options, mimetype, options, …)
+             if multiple=True
     """
-    def _tokenize(string):
-        _quoted_string_re = r'"[^"\\]*(?:\\.[^"\\]*)*"'
-
-        _option_header_piece_re = re.compile(
-            r';\s*(%s|[^\s;=]+)\s*(?:=\s*(%s|[^;]+))?\s*' %
-            (_quoted_string_re, _quoted_string_re)
-        )
-        for match in _option_header_piece_re.finditer(string):
-            k, v = match.groups()
-            k = unquote_header_value(k)
-            if v is not None:
-                v = unquote_header_value(v, k == 'filename')
-            yield k, v
 
     if not value:
         return '', {}
 
-    parts = _tokenize(';' + value)
-    name = next(parts)[0]
-    extra = dict(parts)
-    return name, extra
+    result = []
+
+    value = "," + value.replace("\n", ",")
+    while value:
+        match = _option_header_start_mime_type.match(value)
+        if not match:
+            break
+        result.append(match.group(1))  # mimetype
+        options = {}
+        # Parse options
+        rest = match.group(2)
+        while rest:
+            optmatch = _option_header_piece_re.match(rest)
+            if not optmatch:
+                break
+            option, option_value = optmatch.groups()
+            option = unquote_header_value(option)
+            if option_value is not None:
+                option_value = unquote_header_value(
+                    option_value,
+                    option == 'filename')
+            options[option] = option_value
+            rest = rest[optmatch.end():]
+        result.append(options)
+        if multiple is False:
+            return tuple(result)
+        value = rest
+
+    return tuple(result)
 
 
 def secure_filename(filename):

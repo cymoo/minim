@@ -1,3 +1,4 @@
+# coding=utf-8
 """
 minim.session
 ~~~~~~~~~~~~~
@@ -18,6 +19,7 @@ import pickle
 import shelve
 from hashlib import sha1
 
+#...
 from web import HttpError, request, response
 
 
@@ -335,7 +337,11 @@ class RedisStore(Store):
 
 
 class MemCachedStore(Store):
-    pass
+    """
+    The most popular memcached client for Python is not thread-safe.
+    Wrap all .get and .set operations in a single lock.
+    https://github.com/cymoo/cherrypy/blob/master/cherrypy/lib/sessions.py
+    """
 
 
 # decorators

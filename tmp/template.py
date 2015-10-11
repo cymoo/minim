@@ -1,4 +1,3 @@
-# coding=utf-8
 """
 minim.template
 ~~~~~~~~~~~~~~
@@ -10,7 +9,6 @@ import re
 import math
 import ast
 import os
-from functools import wraps
 from random import choice
 
 __all__ = [
@@ -53,15 +51,7 @@ COMMENT_TOKEN_END = '#}'
 BLOCK_TOKEN_START = '{%'
 BLOCK_TOKEN_END = '%}'
 
-RAW_NODE = 'raw'
 RAW_NODE_END = 'endraw'
-
-BLOCK_REGEX = re.compile(r'^\s*({%.*?%}|{#.*?#})\n$')
-RAW_REGEX = re.compile(r'{%\s*raw\s*%}')
-ENDRAW_REGEX = re.compile(r'{%\s*endraw\s*%}')
-
-WHITESPACE = re.compile(r'\s+')
-NEWLINE = re.compile(r'^\s*\n')
 
 
 TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
@@ -72,6 +62,13 @@ TOK_REGEX = re.compile(r'(%s.*?%s|%s.*?%s|%s.*?%s)' % (
     COMMENT_TOKEN_START,
     COMMENT_TOKEN_END
 ))
+
+WHITESPACE = re.compile(r'\s+')
+NEWLINE = re.compile(r'^\s*\n')
+
+# FILTER_REGEX = re.compile(r'\|')
+
+# STRIP = re.compile(r'(?=\{%.*?%\}\s*)\n')
 
 
 class TemplateError(Exception):
@@ -101,19 +98,6 @@ class TemplateSyntaxError(TemplateError):
 
     def __str__(self):
         return "'%s' seems like invalid syntax" % self.error_syntax
-
-
-def check_closure(end_name):
-    """Checks whether a node has been closed correctly."""
-    def decorator(f):
-        @wraps(f)
-        def wrapper(self, context):
-            if self.end_tok.clean != end_name:
-                raise TemplateError('"To match "%s", "%s" is expected, but "%s" was found.' %
-                                    (self.frag, end_name, self.end_tok.clean))
-            return f(self, context)
-        return wrapper
-    return decorator
 
 
 class _Fragment:
@@ -282,11 +266,14 @@ class _Block(_ScopeNode):
     def process_fragment(self, fragment):
         self.block_name = fragment.split()[1]
 
-    @check_closure('endblock')
     def render(self, context):
         """
 
         """
+        if self.end_tok.clean != 'endblock':
+            raise TemplateError('"To match "%s", "endblock" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
+
         if self.ins.has_ancestor:
             result = self.render_children(context)
             self.ins.block_dicts[-1].update({self.block_name: result})
@@ -384,7 +371,7 @@ class _Variable(_Node):
                 if callback_name == 'safe':
                     safe_flag.append(1)
                 try:
-                    callback = filters[callback_name]
+                    callback = FILTERS[callback_name]
                     value = callback(value, *args, **kwargs)
                 except:
                     raise TemplateFilterError(callback_name)
@@ -415,11 +402,14 @@ class _Escape(_ScopeNode):
         if self.direc not in ['on', 'off', 'ON', 'OFF']:
             raise TemplateSyntaxError(fragment)
 
-    @check_closure('endescape')
     def render(self, context):
         """
 
         """
+        if self.end_tok.clean != 'endescape':
+            raise TemplateError('"To match "%s", "endescape" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
+
         if self.direc in ['off', 'OFF']:
             new_dict = {'~>_<~': 'off'}
             esc_context = context.copy()
@@ -441,11 +431,14 @@ class _Set(_ScopeNode):
         except:
             raise TemplateSyntaxError(fragment)
 
-    @check_closure('endset')
     def render(self, context):
         """
 
         """
+        if self.end_tok.clean != 'endset':
+            raise TemplateError('"To match "%s", "endset" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
+
         new_context = {}
         for arg in self.args:
             n, v = arg.split('=')
@@ -468,8 +461,11 @@ class _If(_ScopeNode):
         except:
             raise TemplateSyntaxError(fragment)
 
-    @check_closure('endif')
     def render(self, context):
+        if self.end_tok.clean != 'endif':
+            raise TemplateError('"To match "%s", "endif" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
+
         for branch in self.branches:
             con_bit = eval(branch[0], context, {})
             if con_bit:
@@ -537,11 +533,14 @@ class _For(_ScopeNode):
         except:
             raise TemplateSyntaxError(fragment)
 
-    @check_closure('endfor')
     def render(self, context):
         """
 
         """
+        if self.end_tok.clean != 'endfor':
+            raise TemplateError('"To match "%s", "endfor" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
+
         items = eval(self.raw_expr, context, {})
 
         loop_attr = {
@@ -611,8 +610,10 @@ class _Raw(_ScopeNode):
     def process_fragment(self, fragment):
         pass
 
-    @check_closure('endraw')
     def render(self, context):
+        if self.end_tok.clean != 'endraw':
+            raise TemplateError('"To match "%s", "endraw" is expected, but "%s" was found.' %
+                                (self.frag, self.end_tok.clean))
         return ''.join(self.children)
 
 
@@ -630,45 +631,46 @@ class Compiler:
     def __init__(self, ins):
         self.ins = ins
 
-    def each_fragment(self):
+    def add_content(self, path_or_string):
         """
-        Yield a file fragment by fragment.
+        Add filepath or strings to the compiler.
         """
-        buf = []
-        raw_scope = False
+        if os.path.isfile(path_or_string):
+            filepath = path_or_string
+            self.ins.template_dir = os.path.dirname(filepath)
+            ptn = re.compile(r'^\s*({%.*?%}|{#.*?#})')
+            raw_ptn = re.compile(r'{%\s*raw\s*%}')
+            end_raw_ptn = re.compile(r'{%\s*endraw\s*%}')
 
-        if self.ins.is_path:
-            lines = line_iter(self.ins.path_or_string)
-        else:
-            lines = self.ins.path_or_string.splitlines(True)
+            def _file_generator(fp):
+                raw_scope = False
+                with open(fp, 'r') as f:
+                    line = f.readline()
+                    if self.ins.remove_newlines:
+                        while line:
+                            if end_raw_ptn.search(line):
+                                raw_scope = False
+                            if ptn.search(line) and not raw_scope:
+                                line = line.replace('\n', '').strip()
+                            yield line
+                            if raw_ptn.search(line) and not end_raw_ptn.search(line):
+                                raw_scope = True
+                            line = f.readline()
 
-        for line in lines:
-
-            if self.ins.strip_newlines:
-                if ENDRAW_REGEX.search(line):
-                    raw_scope = False
-                if BLOCK_REGEX.search(line) and not raw_scope:
-                    line = line.strip()
-                if RAW_REGEX.search(line) and not ENDRAW_REGEX.search(line):
-                    raw_scope = True
-
-            frags = TOK_REGEX.split(line)
-
-            for idx, frag in enumerate(frags):
-                if idx == 0:
-                    if len(frags) == 1:
-                        buf.append(frags[0])
                     else:
-                        buf.append(frag)
-                        yield _Fragment(''.join(buf))
-                        buf = []
-                elif idx == len(frags)-1:
-                    buf.append(frag)
-                else:
-                    if frag:
-                        yield _Fragment(frag)
+                        while line:
+                            yield line
+                            line = f.readline()
+
+            self.template_string = ''.join(_file_generator(filepath))
         else:
-            yield _Fragment(''.join(buf))
+            self.template_string = path_or_string
+
+    def each_fragment(self):
+        """Split the strings using regex. It is a generator."""
+        for fragment in TOK_REGEX.split(self.template_string):
+            if fragment:
+                yield _Fragment(fragment)
 
     def compile(self):
         """
@@ -755,18 +757,18 @@ class MiniTemplate:
     """
     global_context = {}
 
-    def __init__(self, path_or_string, is_path=True, strip_newlines=False):
+    def __init__(self, contents=None, remove_newlines=True):
         """
         When initialization, the MiniTemplate instance binds a Compiler object and passes
         an reference to it. This reference will be passed to all nodes for the use of template
         inheritance.
         """
+        self.template_dir = None
         self.has_ancestor = False
-        self.path_or_string = path_or_string
-        self.is_path = is_path
-        self.strip_newlines = strip_newlines
+        self.remove_newlines = remove_newlines
         self.block_dicts = []
         self.compiler = Compiler(self)
+        self.compiler.add_content(contents)
         self.root = self.compiler.compile()
 
     @classmethod
@@ -787,7 +789,7 @@ class MiniTemplate:
         """
         if not isinstance(name, str):
             raise Exception("Filter-<%s> name should be a str." % str(callback))
-        filters[name] = callback
+        FILTERS[name] = callback
 
     def render(self, **kwargs):
         self.merged_kwargs = self.global_context.copy()
@@ -797,15 +799,6 @@ class MiniTemplate:
 
 
 ### utils ###
-
-def line_iter(path):
-    """Yield a file line by line."""
-    with open(path) as f:
-        line = f.readline()
-        while line:
-            yield line
-            line = f.readline()
-
 
 def safe_eval(expr, context):
     pass
@@ -977,7 +970,7 @@ def set_default(value, arg):
     return value or arg
 
 
-filters = {
+FILTERS = {
     'safe': do_unescape,
     'trim': do_trim,
     'capitalize': do_capitalize,
@@ -1001,14 +994,24 @@ filters = {
 
 if __name__ == '__main__':
 
-    import time
-    p = '/Users/cymoo/Desktop/foo.html'
-    greetings = 'keep calm and carry on'
-    persons = ['cymoo', 'colleen', 'icy']
+    motto = '醒醒我们回家了'
 
+    persons = ['<cymoo>', 'colleen', 'ice', 'milkyway']
+
+    raw = r"""
+    {% extends test %}
+    {% block content %}{{ motto }}{% endblock %}
+    {% block sub-content %}
+    {% for person in persons %}
+    {{ person | safe }}
+    {% endfor %}
+    {% endblock %}
+    """
+    path = '/Users/cymoo/Desktop/foo.html'
+    import time
     t1 = time.time()
-    template = MiniTemplate(p, strip_newlines=True)
-    html = template.render(greetings=greetings, persons=persons)
+    template = MiniTemplate(path)
+    html = template.render(persons=persons, motto=motto)
     t2 = time.time()
     print(html)
-    print('time eclipsed:', t2-t1)
+    print(t2-t1)

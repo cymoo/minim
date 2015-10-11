@@ -1,5 +1,7 @@
-from web_utils import RESPONSE_STATUSES
-from web_utils import HEADER_X_POWERED_BY
+# coding=utf-8
+from httputil import RESPONSE_STATUSES
+from httputil import HEADER_X_POWERED_BY
+
 
 class HttpError(Exception):
     """

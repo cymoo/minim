@@ -1,3 +1,4 @@
+# coding=utf-8
 """
 Minim.formparser
 ~~~~~~~~~~~~~~~
@@ -21,12 +22,11 @@ from utils import safe_str, safe_bytes, parse_options_header
 
 
 __all__ = [
-    'FormDataParser',
-    'URLEncodedParser',
-    'MultiPartParser',
     'stream_iter'
     'LimitedStream',
-    'get_input_stream'
+    'FormDataParser',
+    'URLEncodedParser',
+    'MultiPartParser'
 ]
 
 
@@ -120,38 +120,6 @@ class LimitedStream(object):
         return self._pos
 
 
-def get_input_stream(environ, safe_fallback=True):
-    """Returns the input stream from the WSGI environment and wraps it
-    in the most sensible way possible. The stream returned is not the
-    raw WSGI stream in most cases but one that is safe to read from
-    without taking into account the content length.
-
-    :param environ: the WSGI environ to fetch the stream from.
-    :param safe_fallback: indicates whether the function should use an empty
-                 stream as safe fallback or just return the original
-                 WSGI input stream if it can't wrap it safely.  The
-                 default is to return an empty string in those cases.
-    """
-    stream = environ['wsgi.input']
-    content_length = environ.get('CONTENT_LENGTH')
-    if content_length is not None:
-        try:
-            content_length = max(0, int(content_length))
-        except (ValueError, TypeError):
-            pass
-
-    # A wsgi extension that tells us if the input is terminated.  In
-    # that case we return the stream unchanged as we know we can safely
-    # read it until the end.
-    if environ.get('wsgi.input_terminated'):
-        return stream
-
-    if content_length is None:
-        return safe_fallback and BytesIO() or stream
-
-    return LimitedStream(stream, content_length)
-
-
 def stream_iter(stream, limit, buffer_size):
     """Helper for the line and chunk iter functions."""
     if not isinstance(stream, LimitedStream) and limit is not None:
@@ -159,13 +127,12 @@ def stream_iter(stream, limit, buffer_size):
     _read = stream.read
     while 1:
         item = _read(buffer_size)
-        print('_make_chunk_iter', item)
         if not item:
             break
         yield item
 
 
-def default_stream_factory(total_content_length):
+def stream_factory(total_content_length):
     """Creates a stream depending on content_length."""
     if total_content_length > 1024 * 500:
         return TemporaryFile('wb+')
@@ -203,9 +170,6 @@ class FormDataParser(object):
     mimetype is unknown the input stream is wrapped and returned as first
     argument, else the stream is empty.
 
-
-    :param stream_factory: An optional callable that returns a new read and
-                           writeable file descriptor.
     :param charset: The character set for URL and url encoded form data.
     :param errors: The encoding error behavior.
     :param max_form_memory_size: the maximum number of bytes to be accepted for
@@ -220,12 +184,8 @@ class FormDataParser(object):
     :param silent: If set to False parsing errors will not be caught.
     """
 
-    def __init__(self, stream_factory=None, charset='utf-8',
-                 errors='replace', max_form_memory_size=None,
-                 max_content_length=None, silent=True):
-        if stream_factory is None:
-            stream_factory = default_stream_factory
-        self.stream_factory = stream_factory
+    def __init__(self, charset='utf-8', errors='replace',
+                 max_form_memory_size=None, max_content_length=None, silent=True):
         self.charset = charset
         self.errors = errors
         self.max_form_memory_size = max_form_memory_size
@@ -265,7 +225,7 @@ class FormDataParser(object):
 
     @exhaust_stream
     def _parse_multipart(self, stream, mimetype, content_length, options):
-        parser = MultiPartParser(self.stream_factory, self.charset, self.errors,
+        parser = MultiPartParser(self.charset, self.errors,
                                  max_form_memory_size=self.max_form_memory_size)
 
         boundary = options.get('boundary')
@@ -290,7 +250,6 @@ class FormDataParser(object):
         form = parser.parse(stream)
         return stream, form, FilesDict()
 
-    #: mapping of mimetypes to parsing functions
     parse_functions = {
         'multipart/form-data':                  _parse_multipart,
         'application/x-www-form-urlencoded':    _parse_urlencoded,
@@ -386,14 +345,11 @@ _end = 'end'
 
 
 class MultiPartParser(object):
-    def __init__(self, stream_factory=None, charset='utf-8', errors='replace',
-                 max_form_memory_size=None, buffer_size=64 * 1024):
-        self.stream_factory = stream_factory
+    def __init__(self, charset='utf-8', errors='replace', max_form_memory_size=None,
+                 buffer_size=64 * 1024):
         self.charset = charset
         self.errors = errors
         self.max_form_memory_size = max_form_memory_size
-        if stream_factory is None:
-            stream_factory = default_stream_factory
 
         #: Make sure the buffer size is divisible by four so that we can base64
         #: decode chunk by chunk;
@@ -444,7 +400,6 @@ class MultiPartParser(object):
         for line in iterable:
             line, line_terminated = _line_parse(safe_str(line))
             if not line_terminated:
-                # why this exception is not raised.......
                 raise ValueError('unexpected end of line in multipart header.')
             if not line:
                 break
@@ -457,7 +412,6 @@ class MultiPartParser(object):
                     result.append((parts[0].strip(), parts[1].strip()))
 
         return HeadersDict(result)
-
 
     @staticmethod
     def _find_terminator(iterator):
@@ -493,17 +447,11 @@ class MultiPartParser(object):
             return ct_params.get('charset', self.charset)
         return self.charset
 
-    def start_file_streaming(self, filename, headers, total_content_length):
+    def start_file_streaming(self, filename, total_content_length):
         if isinstance(filename, bytes):
             filename = filename.decode(self.charset, self.errors)
         filename = self._fix_ie_filename(filename)
-        content_type = headers.get('content-type')
-        try:
-            content_length = int(headers['content-length'])
-        except (KeyError, ValueError):
-            content_length = 0
-        container = self.stream_factory(total_content_length, content_type,
-                                        filename, content_length)
+        container = stream_factory(total_content_length)
         return filename, container
 
     def validate_boundary(self, boundary):
@@ -557,7 +505,7 @@ class MultiPartParser(object):
         """Generate parts:
         ``('begin_form', (headers, name))``
         ``('begin_file', (headers, name, filename))``
-        ``('cont', bytestring)``
+        ``('cont', byte-string)``
         ``('end', None)``
 
         Always obeys the grammar:
@@ -659,34 +607,32 @@ class MultiPartParser(object):
         """
         in_memory = 0
 
-        for ellt, ell in self.parse_lines(stream, boundary, content_length):
-            print('ellt ell', ellt, ell)
-            if ellt == _begin_file:
-                headers, name, filename = ell
+        for tag, cont in self.parse_lines(stream, boundary, content_length):
+            if tag == _begin_file:
+                headers, name, filename = cont
                 is_file = True
                 guard_memory = False
-                filename, container = self.start_file_streaming(
-                    filename, headers, content_length)
+                filename, container = self.start_file_streaming(filename, content_length)
                 _write = container.write
 
-            elif ellt == _begin_form:
-                headers, name = ell
+            elif tag == _begin_form:
+                headers, name = cont
                 is_file = False
                 container = []
                 _write = container.append
                 guard_memory = self.max_form_memory_size is not None
 
-            elif ellt == _cont:
-                _write(ell)
+            elif tag == _cont:
+                _write(cont)
                 # if we write into memory and there is a memory size limit we
                 # count the number of bytes in memory and raise an exception if
                 # there is too much data in memory.
                 if guard_memory:
-                    in_memory += len(ell)
+                    in_memory += len(cont)
                     if in_memory > self.max_form_memory_size:
                         raise Exception('request entity is too large.')
 
-            elif ellt == _end:
+            elif tag == _end:
                 if is_file:
                     container.seek(0)
                     yield ('file',
