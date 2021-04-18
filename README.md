@@ -1,8 +1,5 @@
-A very simple and cute web framework will be born~~
+This is my attempt to write a web framework.
 
-The tiny framework will include url routing, session, template language, object relationship mapping, session, auto-generated admin,
-etc~~~
+I borrowed designs and codes from Flask, Django, Bottle and Web.py and wanted it to be an ideal framework for me.
 
-Keep calm and carry on!
-
-Do not go gentle into that good night!
+But it failed.
